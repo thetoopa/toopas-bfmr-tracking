@@ -1,0 +1,22 @@
+{
+  "assumptions": {
+    "default_cashback_rate": 0.06,
+    "no_order_account": "Personal",
+    "no_order_cashback_rate": 0.06,
+    "business_default_cashback_rate": 0.06,
+    "manual_assumed_orders": []
+  },
+  "chrome": {
+    "bfmr_profile_directory": "Default",
+    "skip_paid_orders": true,
+    "profiles": [
+      {
+        "id": "personal-default",
+        "name": "Personal Amazon",
+        "profile_directory": "Default",
+        "account_type": "personal",
+        "enabled": true
+      }
+    ]
+  }
+}

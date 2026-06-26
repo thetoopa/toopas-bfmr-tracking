@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#047d78" />
+    <meta name="description" content="Local BFMR purchasing tracker dashboard." />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Toopa BFMR" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>Toopa's BFMR Tracking</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <script>
+      document.documentElement.dataset.theme = localStorage.getItem("toopa-theme") || "light";
+    </script>
+    <link rel="stylesheet" href="/styles.css?v=20260626-19" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">
+          <span>T</span>
+        </div>
+        <div>
+          <h1>Toopa's BFMR Tracking</h1>
+          <p id="metadata" class="metadata">Loading data...</p>
+          <p class="build-marker">Build 20260626-19 | Synced analytics filters</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="themeToggle" class="secondary-button" type="button">Dark</button>
+        <button id="installButton" class="secondary-button" type="button" hidden>Install</button>
+        <a class="download-link" href="/download/workbook">Excel</a>
+      </div>
+    </header>
+
+    <main>
+      <nav class="section-nav app-tabs" aria-label="Dashboard tabs">
+        <button class="tab-button active" type="button" data-tab="dashboard">Dashboard</button>
+        <button class="tab-button" type="button" data-tab="orders">Orders</button>
+        <button class="tab-button" type="button" data-tab="analytics">Analytics</button>
+        <button class="tab-button" type="button" data-tab="money">Money</button>
+        <button class="tab-button" type="button" data-tab="operations">Operations</button>
+        <button class="tab-button" type="button" data-tab="settings">Settings</button>
+      </nav>
+
+      <section class="beta-hero tab-panel active" data-tab-panel="dashboard" aria-label="Beta dashboard header">
+        <div>
+          <p class="eyebrow">Beta workspace</p>
+          <h2>Track every order from reservation to payout.</h2>
+          <p>Profit is expected until BFMR processing is complete; cash is only counted as paid after the paid stage.</p>
+        </div>
+        <div class="hero-rail" aria-hidden="true">
+          <span>Reserved</span>
+          <span>Ordered</span>
+          <span>Shipped</span>
+          <span>Pkg Received</span>
+          <span>Processed</span>
+          <span>Paid</span>
+        </div>
+      </section>
+
+      <section id="overview" class="toolbar tab-panel active" data-tab-panel="dashboard" aria-label="Filters and uploads">
+        <div class="filters">
+          <label>
+            Month
+            <select id="monthFilter"></select>
+          </label>
+          <label>
+            Status
+            <select id="statusFilter"></select>
+          </label>
+          <label>
+            Account
+            <select id="accountFilter"></select>
+          </label>
+          <label class="search-field">
+            Search
+            <input id="searchInput" type="search" placeholder="Item, order, or tracking" />
+          </label>
+          <label>
+            Price Source
+            <select id="priceSourceFilter"></select>
+          </label>
+          <label>
+            Tracking
+            <select id="trackingFilter">
+              <option value="all">All Tracking</option>
+              <option value="missing">Missing</option>
+              <option value="submitted">Submitted</option>
+            </select>
+          </label>
+          <label>
+            Payment
+            <select id="paymentFilter">
+              <option value="all">All Payments</option>
+              <option value="open">Open Payout</option>
+              <option value="paid">Paid Out</option>
+              <option value="unpaid">No Cash Paid</option>
+            </select>
+          </label>
+          <label>
+            Amazon
+            <select id="amazonFilter">
+              <option value="all">All Amazon Matches</option>
+              <option value="matched">Matched Orders</option>
+              <option value="unmatched">Unmatched Orders</option>
+              <option value="precise">Precise Cashback</option>
+            </select>
+          </label>
+          <label>
+            Sort
+            <select id="sortFilter">
+              <option value="date_desc">Date Reserved Newest</option>
+              <option value="date_asc">Date Reserved Oldest</option>
+              <option value="source_row_asc">BFMR Row Low</option>
+              <option value="source_row_desc">BFMR Row High</option>
+              <option value="status_asc">Status A-Z</option>
+              <option value="item_asc">Item A-Z</option>
+              <option value="order_asc">Order # A-Z</option>
+              <option value="tracking_asc">Tracking A-Z</option>
+              <option value="eta_asc">ETA Soonest</option>
+              <option value="eta_desc">ETA Latest</option>
+              <option value="account_asc">Account A-Z</option>
+              <option value="amazon_asc">Amazon Needed First</option>
+              <option value="profit_desc">Profit High</option>
+              <option value="profit_asc">Profit Low</option>
+              <option value="spend_desc">Retail Price High</option>
+              <option value="spend_asc">Retail Price Low</option>
+              <option value="payout_desc">Payout High</option>
+              <option value="payout_asc">Payout Low</option>
+              <option value="cashback_desc">Cashback High</option>
+              <option value="open_desc">Open Payout High</option>
+              <option value="paid_amount_desc">Amount Paid High</option>
+              <option value="processed_desc">Date Processed Newest</option>
+              <option value="paid_desc">Date Paid Newest</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="side-stack">
+          <form id="uploadForm" class="upload-form">
+            <label>
+              BFMR export
+              <input id="trackerFile" name="tracker_file" type="file" accept=".xlsx,.xls" required />
+            </label>
+            <label>
+              Price workbook
+              <input id="priceFile" name="price_file" type="file" accept=".xlsx,.xls" />
+            </label>
+            <button id="uploadButton" type="submit">Replace Data</button>
+          </form>
+          <form id="gusImportForm" class="upload-form">
+            <label class="full-width-field">
+              Gus Tracking Sheet
+              <input id="gusFile" name="gus_file" type="file" accept=".xlsx,.xls" required />
+            </label>
+            <button id="gusImportButton" type="submit">Import Gus Tracking Sheet</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="extract" class="extractor-panel tab-panel" data-tab-panel="operations" aria-label="Data refresh">
+        <div class="panel-heading">
+          <h2>Data Refresh</h2>
+          <span id="manualExtractStatus">Choose a normal update or one full catch-up pass.</span>
+        </div>
+        <div class="scrape-mode-grid">
+          <article class="scrape-mode">
+            <div>
+              <h3>Normal Update</h3>
+              <p>Scrapes every BFMR order that is not yet in paid status and updates relevant Amazon/BFMR details.</p>
+            </div>
+            <button id="rescrapeButton" type="button">Run Normal Update</button>
+          </article>
+          <article class="scrape-mode">
+            <div>
+              <h3>One-Time All BFMR Orders</h3>
+              <p>Refreshes BFMR, then re-checks every non-cancelled BFMR order, including paid orders.</p>
+            </div>
+            <button id="rescrapeAllButton" type="button">Run One-Time All</button>
+          </article>
+        </div>
+        <div class="rescrape-strip">
+          <span id="rescrapeStatus">Normal update scrapes all orders not yet in paid status and updates relevant information.</span>
+        </div>
+      </section>
+
+      <section id="quickChips" class="quick-chips tab-panel" data-tab-panel="orders" aria-label="Quick filters"></section>
+
+      <section id="orders" class="table-wrap tab-panel" data-tab-panel="orders" aria-label="Order details">
+        <div class="table-heading">
+          <h2>BFMR Table</h2>
+          <div class="table-tools">
+            <span id="rowCount"></span>
+            <button id="columnPrefsButton" class="secondary-button small-button" type="button">Columns</button>
+          </div>
+        </div>
+        <div id="columnPrefsPanel" class="column-prefs" hidden>
+          <div class="panel-heading">
+            <h3>Table Columns</h3>
+            <button id="resetColumnPrefs" class="secondary-button small-button" type="button">Reset</button>
+          </div>
+          <div id="columnPrefsList" class="column-prefs-list"></div>
+        </div>
+        <div class="table-scroll">
+          <table class="bfmr-grid">
+            <thead id="ordersHead"></thead>
+            <tbody id="ordersBody"></tbody>
+          </table>
+        </div>
+        <div id="orderCards" class="order-cards"></div>
+      </section>
+
+      <section id="kpiGrid" class="kpi-grid tab-panel active" data-tab-panel="dashboard" aria-label="Totals"></section>
+      <section id="lifecycleGrid" class="lifecycle-grid tab-panel active" data-tab-panel="dashboard" aria-label="Order lifecycle"></section>
+      <section id="insightGrid" class="insight-grid tab-panel active" data-tab-panel="dashboard" aria-label="Insights"></section>
+
+      <section id="analyticsFilters" class="analytics-filters tab-panel" data-tab-panel="analytics" aria-label="Analytics filters">
+        <label>
+          Month
+          <select id="analyticsMonthFilter"></select>
+        </label>
+        <label>
+          Status
+          <select id="analyticsStatusFilter"></select>
+        </label>
+        <label>
+          Account
+          <select id="analyticsAccountFilter"></select>
+        </label>
+        <label>
+          Amazon
+          <select id="analyticsAmazonFilter">
+            <option value="all">All Amazon Matches</option>
+            <option value="matched">Matched Orders</option>
+            <option value="unmatched">Unmatched Orders</option>
+            <option value="precise">Precise Cashback</option>
+          </select>
+        </label>
+        <label class="search-field">
+          Search
+          <input id="analyticsSearchInput" type="search" placeholder="Filter chart data" />
+        </label>
+      </section>
+
+      <section id="trends" class="dashboard-grid tab-panel" data-tab-panel="analytics" aria-label="Charts">
+        <article class="panel wide">
+          <div class="panel-heading">
+            <h2>Monthly Performance</h2>
+            <span id="monthNote"></span>
+          </div>
+          <canvas id="monthlyChart" height="260"></canvas>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Status Mix</h2>
+          </div>
+          <canvas id="statusChart" height="260"></canvas>
+          <div id="statusLegend" class="legend"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Account Profit</h2>
+          </div>
+          <canvas id="accountChart" height="260"></canvas>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Top Items</h2>
+          </div>
+          <div id="topItems" class="top-list"></div>
+        </article>
+        <article class="panel wide">
+          <div class="panel-heading">
+            <h2>Daily Profit</h2>
+            <span id="dailyNote"></span>
+          </div>
+          <canvas id="dailyProfitChart" height="230"></canvas>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Price Source</h2>
+          </div>
+          <canvas id="priceSourceChart" height="230"></canvas>
+          <div id="priceLegend" class="legend"></div>
+        </article>
+      </section>
+
+      <section id="attention" class="attention-grid tab-panel" data-tab-panel="money" aria-label="Operational lists">
+        <article class="panel bonus-panel">
+          <div class="panel-heading">
+            <h2>Profit Add-ons</h2>
+            <span id="addonTotal"></span>
+          </div>
+          <form id="addonForm" class="addon-form">
+            <label>
+              Type
+              <select id="addonCategory" name="category">
+                <option value="checking_bonus">Checking Bonus</option>
+                <option value="bfmr_referral">BFMR Referral</option>
+                <option value="amazon_young_adult_cashback">Amazon Young Adult Cashback</option>
+                <option value="extra_profit">Extra Profit</option>
+              </select>
+            </label>
+            <label>
+              Amount
+              <input id="addonAmount" name="amount" type="number" step="0.01" placeholder="250.00" required />
+            </label>
+            <label>
+              Date
+              <input id="addonDate" name="date" type="date" />
+            </label>
+            <label class="addon-description">
+              Description
+              <input id="addonDescription" name="description" type="text" placeholder="Bonus name or cashback source" required />
+            </label>
+            <label class="addon-notes">
+              Notes
+              <input id="addonNotes" name="notes" type="text" placeholder="Optional details" />
+            </label>
+            <button id="addonButton" type="submit">Add Profit</button>
+          </form>
+          <div id="addonList" class="compact-list addon-list"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Needs Attention</h2>
+            <span id="watchlistCount"></span>
+          </div>
+          <div id="watchlist" class="compact-list"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>ETA Totals</h2>
+            <span id="etaTotalsCount"></span>
+          </div>
+          <div id="etaTotals" class="compact-list"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Highest Profit</h2>
+          </div>
+          <div id="topOrders" class="compact-list"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Top Spend</h2>
+          </div>
+          <div id="topSpend" class="compact-list"></div>
+        </article>
+      </section>
+
+      <section id="settings" class="settings-panel tab-panel" data-tab-panel="settings" aria-label="Settings">
+        <div class="panel-heading">
+          <h2>Settings</h2>
+          <span id="settingsStatus">Chrome profiles and shared assumptions.</span>
+        </div>
+        <div class="settings-grid">
+          <article class="settings-card">
+            <h3>Assumptions</h3>
+            <div class="settings-form">
+              <label>
+                Default Cashback %
+                <input id="defaultCashbackRate" type="number" min="0" max="25" step="0.1" />
+              </label>
+              <label>
+                No-Order Account
+                <select id="noOrderAccount">
+                  <option value="Personal">Personal</option>
+                  <option value="Business">Business</option>
+                </select>
+              </label>
+              <label>
+                No-Order Cashback %
+                <input id="noOrderCashbackRate" type="number" min="0" max="25" step="0.1" />
+              </label>
+              <label>
+                Business Default %
+                <input id="businessDefaultCashbackRate" type="number" min="0" max="25" step="0.1" />
+              </label>
+              <label class="settings-wide">
+                Manual Assumed Orders JSON
+                <textarea id="manualAssumptionsJson" rows="7" spellcheck="false"></textarea>
+              </label>
+            </div>
+          </article>
+          <article class="settings-card">
+            <h3>Chrome Profiles</h3>
+            <div class="settings-form">
+              <label>
+                BFMR Chrome Profile
+                <select id="bfmrProfileDirectory"></select>
+              </label>
+              <label class="checkbox-row">
+                <input id="skipPaidOrders" type="checkbox" />
+                Skip paid orders unless ETA needs refresh
+              </label>
+            </div>
+            <div id="settingsProfiles" class="settings-profiles"></div>
+            <div class="settings-actions">
+              <button id="addProfileButton" class="secondary-button" type="button">Add Profile</button>
+              <button id="saveSettingsButton" type="button">Save Settings</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js?v=20260626-19"></script>
+  </body>
+</html>

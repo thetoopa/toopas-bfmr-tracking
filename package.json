@@ -1,0 +1,13 @@
+{
+  "name": "toopas-bfmr-tracking",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check web/app.js && node --check web/sw.js && node --check scripts/live_extract.mjs && node --check scripts/build_workbook.mjs",
+    "start": "python server.py --host 0.0.0.0 --port 8765"
+  },
+  "dependencies": {
+    "playwright": "^1.56.0"
+  }
+}

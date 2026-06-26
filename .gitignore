@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+node_modules/
+
+data/*.json
+data/live_extract/
+logs/
+uploads/
+outputs/
+tools/
+
+.agents/
+.codex/
+.env
+.env.*
