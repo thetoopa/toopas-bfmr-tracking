@@ -547,6 +547,7 @@ def apply_amazon_enrichment(
             2,
         )
 
+    apply_return_accounting(enriched.get("records", []))
     enriched["summary"] = summarize(enriched.get("records", []))
     metadata = enriched.setdefault("metadata", {})
     active_amazon_records = [
@@ -780,6 +781,78 @@ def infer_split_return_details(records: list[dict[str, Any]]) -> None:
             record["return_context"] = "Needs manual original-order review"
 
 
+def apply_return_accounting(records: list[dict[str, Any]]) -> None:
+    for record in records:
+        record["accounting_purchase_total"] = round(float(record.get("purchase_total") or 0), 2)
+        record["accounting_payout_total"] = round(float(record.get("payout_total") or 0), 2)
+        record["accounting_amount_paid"] = round(float(record.get("amount_paid") or 0), 2)
+        record["accounting_quantity"] = round(float(record.get("quantity") or 0), 4)
+        record["accounting_profit"] = round(float(record.get("profit") or 0), 2)
+        record["accounting_excluded"] = False
+        record["accounting_reason"] = "Counted as BFMR row"
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        if clean_text(record.get("status")).lower() == "cancelled":
+            continue
+        key = clean_text(record.get("return_group_key")) or normalize_order_number(record.get("order_number"))
+        if not key:
+            continue
+        groups[(key, normalize_text(record.get("item_name")))].append(record)
+
+    for group_rows in groups.values():
+        statuses = {clean_text(record.get("status")).lower() for record in group_rows}
+        has_return_signal = bool(statuses.intersection({"return", "deadline"}))
+        has_terminal_row = any(
+            clean_text(record.get("status")).lower() in {"paid", "processed", "package received", "shipped", "purchased"}
+            and clean_text(record.get("status")).lower() not in {"return", "deadline"}
+            for record in group_rows
+        )
+        if not has_return_signal or not has_terminal_row:
+            continue
+
+        for record in group_rows:
+            status = clean_text(record.get("status")).lower()
+            if status in {"return", "deadline"}:
+                record["accounting_purchase_total"] = 0.0
+                record["accounting_payout_total"] = 0.0
+                record["accounting_amount_paid"] = 0.0
+                record["accounting_quantity"] = 0.0
+                record["accounting_profit"] = 0.0
+                record["accounting_excluded"] = True
+                record["accounting_reason"] = "Superseded by accepted split row in return group"
+                continue
+
+            payout_total = float(record.get("payout_total") or 0)
+            amount_paid = float(record.get("amount_paid") or 0)
+            payout_per_unit = float(record.get("payout_per_unit") or 0)
+            quantity = float(record.get("quantity") or 0)
+            purchase_total = float(record.get("purchase_total") or 0)
+            if amount_paid > 0 and payout_total > 0 and amount_paid < payout_total and payout_per_unit > 0 and quantity > 0:
+                accepted_units = amount_paid / payout_per_unit
+                if 0 < accepted_units < quantity:
+                    purchase_per_unit = purchase_total / quantity if quantity else purchase_total
+                    adjusted_purchase = round(purchase_per_unit * accepted_units, 2)
+                    record["accounting_purchase_total"] = adjusted_purchase
+                    record["accounting_payout_total"] = round(amount_paid, 2)
+                    record["accounting_amount_paid"] = round(amount_paid, 2)
+                    record["accounting_quantity"] = round(accepted_units, 4)
+                    record["accounting_profit"] = round(
+                        calculate_profit(
+                            clean_text(record.get("status")),
+                            amount_paid,
+                            adjusted_purchase,
+                            float(record.get("cashback_rate") or CASHBACK_RATE),
+                        ),
+                        2,
+                    )
+                    record["accounting_reason"] = "Scaled to BFMR paid quantity in partial return group"
+                    record["accepted_quantity_inferred"] = round(accepted_units, 4)
+                    continue
+
+            record["accounting_reason"] = "Accepted split row in return group"
+
+
 def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
@@ -842,6 +915,7 @@ def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -
 
     infer_partial_return_details(records)
     infer_split_return_details(records)
+    apply_return_accounting(records)
     records.sort(key=lambda record: (record["date"] or "", record["source_row"]), reverse=True)
     for index, record in enumerate(records, start=1):
         record["id"] = index
@@ -931,6 +1005,7 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
 
     infer_partial_return_details(records)
     infer_split_return_details(records)
+    apply_return_accounting(records)
     records.sort(key=lambda record: (record["date"] or "", record["source_row"]), reverse=True)
     for index, record in enumerate(records, start=1):
         record["id"] = index
@@ -1018,6 +1093,7 @@ def normalize_gus_tracking_sheet(tracker_sheet: Path) -> dict[str, Any]:
 
     infer_partial_return_details(records)
     infer_split_return_details(records)
+    apply_return_accounting(records)
     records.sort(key=lambda record: (record["date"] or "", record["source_row"]), reverse=True)
     for index, record in enumerate(records, start=1):
         record["id"] = index
@@ -1061,11 +1137,11 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         )
         bucket["orders"] += 1
         if record["status"].lower() != "cancelled":
-            bucket["units"] += record["quantity"]
-            bucket["spend"] += record["purchase_total"]
-            bucket["payout"] += record["payout_total"]
-        bucket["profit"] += record["profit"]
-        bucket["cash_paid"] += record["amount_paid"]
+            bucket["units"] += float(record.get("accounting_quantity", record["quantity"]) or 0)
+            bucket["spend"] += float(record.get("accounting_purchase_total", record["purchase_total"]) or 0)
+            bucket["payout"] += float(record.get("accounting_payout_total", record["payout_total"]) or 0)
+        bucket["profit"] += float(record.get("accounting_profit", record["profit"]) or 0)
+        bucket["cash_paid"] += float(record.get("accounting_amount_paid", record["amount_paid"]) or 0)
 
     status_counts = Counter(record["status"] for record in records)
     price_counts = Counter(record["price_source"] for record in records)
@@ -1079,19 +1155,19 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         )
         account["orders"] += 1
         if record["status"].lower() != "cancelled":
-            account["spend"] += record["purchase_total"]
-            account["payout"] += record["payout_total"]
-        account["profit"] += record["profit"]
+            account["spend"] += float(record.get("accounting_purchase_total", record["purchase_total"]) or 0)
+            account["payout"] += float(record.get("accounting_payout_total", record["payout_total"]) or 0)
+        account["profit"] += float(record.get("accounting_profit", record["profit"]) or 0)
 
         item = item_summary.setdefault(
             record["item_name"],
             {"item_name": record["item_name"], "orders": 0, "units": 0.0, "spend": 0.0, "profit": 0.0},
         )
         item["orders"] += 1
-        item["units"] += record["quantity"]
+        item["units"] += float(record.get("accounting_quantity", record["quantity"]) or 0)
         if record["status"].lower() != "cancelled":
-            item["spend"] += record["purchase_total"]
-        item["profit"] += record["profit"]
+            item["spend"] += float(record.get("accounting_purchase_total", record["purchase_total"]) or 0)
+        item["profit"] += float(record.get("accounting_profit", record["profit"]) or 0)
 
     def money(value: float) -> float:
         return round(value, 2)
@@ -1136,12 +1212,15 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "orders": len(records),
         "active_orders": len(active),
         "paid_orders": len(paid),
-        "units": round(sum(record["quantity"] for record in active), 2),
-        "spend": money(sum(record["purchase_total"] for record in active)),
-        "payout": money(sum(record["payout_total"] for record in active)),
-        "profit": money(sum(record["profit"] for record in records)),
-        "cash_paid": money(sum(record["amount_paid"] for record in records)),
-        "open_payout": money(sum(record["payout_total"] for record in active) - sum(record["amount_paid"] for record in records)),
+        "units": round(sum(float(record.get("accounting_quantity", record["quantity"]) or 0) for record in active), 2),
+        "spend": money(sum(float(record.get("accounting_purchase_total", record["purchase_total"]) or 0) for record in active)),
+        "payout": money(sum(float(record.get("accounting_payout_total", record["payout_total"]) or 0) for record in active)),
+        "profit": money(sum(float(record.get("accounting_profit", record["profit"]) or 0) for record in records)),
+        "cash_paid": money(sum(float(record.get("accounting_amount_paid", record["amount_paid"]) or 0) for record in records)),
+        "open_payout": money(
+            sum(float(record.get("accounting_payout_total", record["payout_total"]) or 0) for record in active)
+            - sum(float(record.get("accounting_amount_paid", record["amount_paid"]) or 0) for record in records)
+        ),
         "missing_tracking": len(missing_tracking),
         "estimated_purchase_rows": sum(1 for record in records if record["purchase_is_estimate"]),
         "status_counts": dict(status_counts),

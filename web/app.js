@@ -274,9 +274,29 @@ function activeRecord(record) {
   return record.status !== "Cancelled";
 }
 
+function accountingQuantity(record) {
+  return Number(record.accounting_quantity ?? record.quantity ?? 0) || 0;
+}
+
+function accountingPurchase(record) {
+  return Number(record.accounting_purchase_total ?? record.purchase_total ?? 0) || 0;
+}
+
+function accountingPayout(record) {
+  return Number(record.accounting_payout_total ?? record.payout_total ?? 0) || 0;
+}
+
+function accountingPaid(record) {
+  return Number(record.accounting_amount_paid ?? record.amount_paid ?? 0) || 0;
+}
+
+function accountingProfit(record) {
+  return Number(record.accounting_profit ?? record.profit ?? 0) || 0;
+}
+
 function openPayout(record) {
   if (!activeRecord(record)) return 0;
-  return Math.max((record.payout_total || 0) - (record.amount_paid || 0), 0);
+  return Math.max(accountingPayout(record) - accountingPaid(record), 0);
 }
 
 function hasAmazonOrderNumber(value) {
@@ -321,9 +341,9 @@ function returnGroups(records) {
     }
     const group = groups.get(key);
     group.rows.push(record);
-    group.spend += Number(record.purchase_total || 0);
-    group.payout += Number(record.payout_total || 0);
-    group.profit += Number(record.profit || 0);
+    group.spend += accountingPurchase(record);
+    group.payout += accountingPayout(record);
+    group.profit += accountingProfit(record);
     group.open += openPayout(record);
   }
   return [...groups.values()].sort((a, b) => compareDate(b.rows[0]?.date, a.rows[0]?.date) || compareText(a.key, b.key));
@@ -333,10 +353,10 @@ function lifecycleStage(record) {
   if (!activeRecord(record)) return "cancelled";
   const status = String(record.status || "").toLowerCase();
   const hasRealTracking = !trackingMissing(record);
-  const quantity = Number(record.quantity || 0);
+  const quantity = accountingQuantity(record);
   const received = Number(record.received || 0);
-  const payout = Number(record.payout_total || 0);
-  const paid = Number(record.amount_paid || 0);
+  const payout = accountingPayout(record);
+  const paid = accountingPaid(record);
 
   if (status === "paid" || record.date_paid || (payout > 0 && paid >= payout)) return "paid";
   if (status === "processed" || status === "return" || record.date_processed) return "processed";
@@ -486,8 +506,8 @@ function filteredRecords() {
     const paymentOk =
       state.payment === "all" ||
       (state.payment === "open" && openPayout(record) > 0) ||
-      (state.payment === "paid" && activeRecord(record) && record.payout_total > 0 && openPayout(record) <= 0) ||
-      (state.payment === "unpaid" && activeRecord(record) && (record.amount_paid || 0) <= 0);
+      (state.payment === "paid" && activeRecord(record) && accountingPayout(record) > 0 && openPayout(record) <= 0) ||
+      (state.payment === "unpaid" && activeRecord(record) && accountingPaid(record) <= 0);
     const amazonOk =
       state.amazon === "all" ||
       (state.amazon === "matched" && record.amazon_order_matched) ||
@@ -513,13 +533,13 @@ function filteredRecords() {
     if (state.sort === "amazon_asc") result = Number(a.amazon_order_matched) - Number(b.amazon_order_matched);
     if (state.sort === "profit_desc") result = compareNumber(b.profit, a.profit);
     if (state.sort === "profit_asc") result = compareNumber(a.profit, b.profit);
-    if (state.sort === "spend_desc") result = compareNumber(b.purchase_total, a.purchase_total);
-    if (state.sort === "spend_asc") result = compareNumber(a.purchase_total, b.purchase_total);
-    if (state.sort === "payout_desc") result = compareNumber(b.payout_total, a.payout_total);
-    if (state.sort === "payout_asc") result = compareNumber(a.payout_total, b.payout_total);
+    if (state.sort === "spend_desc") result = compareNumber(accountingPurchase(b), accountingPurchase(a));
+    if (state.sort === "spend_asc") result = compareNumber(accountingPurchase(a), accountingPurchase(b));
+    if (state.sort === "payout_desc") result = compareNumber(accountingPayout(b), accountingPayout(a));
+    if (state.sort === "payout_asc") result = compareNumber(accountingPayout(a), accountingPayout(b));
     if (state.sort === "cashback_desc") result = compareNumber(b.cashback_rate, a.cashback_rate);
     if (state.sort === "open_desc") result = compareNumber(openPayout(b), openPayout(a));
-    if (state.sort === "paid_amount_desc") result = compareNumber(b.amount_paid, a.amount_paid);
+    if (state.sort === "paid_amount_desc") result = compareNumber(accountingPaid(b), accountingPaid(a));
     if (state.sort === "processed_desc") result = compareDate(b.date_processed, a.date_processed);
     if (state.sort === "paid_desc") result = compareDate(b.date_paid, a.date_paid);
     return result || defaultSort(a, b);
@@ -567,9 +587,9 @@ function summarize(records, addons = []) {
       if (!lifecycle.has(stage)) lifecycle.set(stage, { stage, rows: 0, units: 0, spend: 0, payout: 0, open_payout: 0 });
       const stageRow = lifecycle.get(stage);
       stageRow.rows += 1;
-      stageRow.units += Number(record.quantity || 0);
-      stageRow.spend += Number(record.purchase_total || 0);
-      stageRow.payout += Number(record.payout_total || 0);
+      stageRow.units += accountingQuantity(record);
+      stageRow.spend += accountingPurchase(record);
+      stageRow.payout += accountingPayout(record);
       stageRow.open_payout += openPayout(record);
     }
     priceSources.set(record.price_source, (priceSources.get(record.price_source) || 0) + 1);
@@ -580,13 +600,13 @@ function summarize(records, addons = []) {
     }
     const monthRow = monthly.get(month);
     monthRow.orders += 1;
-    monthRow.profit += record.profit || 0;
-    monthRow.product_profit += record.profit || 0;
-    monthRow.cash_paid += record.amount_paid || 0;
+    monthRow.profit += accountingProfit(record);
+    monthRow.product_profit += accountingProfit(record);
+    monthRow.cash_paid += accountingPaid(record);
     if (activeRecord(record)) {
-      monthRow.units += record.quantity || 0;
-      monthRow.spend += record.purchase_total || 0;
-      monthRow.payout += record.payout_total || 0;
+      monthRow.units += accountingQuantity(record);
+      monthRow.spend += accountingPurchase(record);
+      monthRow.payout += accountingPayout(record);
     }
 
     const day = record.date || "Unknown";
@@ -595,11 +615,11 @@ function summarize(records, addons = []) {
     }
     const dayRow = daily.get(day);
     dayRow.orders += 1;
-    dayRow.profit += record.profit || 0;
-    dayRow.product_profit += record.profit || 0;
+    dayRow.profit += accountingProfit(record);
+    dayRow.product_profit += accountingProfit(record);
     if (activeRecord(record)) {
-      dayRow.spend += record.purchase_total || 0;
-      dayRow.payout += record.payout_total || 0;
+      dayRow.spend += accountingPurchase(record);
+      dayRow.payout += accountingPayout(record);
     }
 
     if (activeRecord(record) && record.amazon_delivery_eta_date) {
@@ -609,10 +629,10 @@ function summarize(records, addons = []) {
       }
       const etaRow = etaDays.get(etaDate);
       etaRow.rows += 1;
-      etaRow.units += record.quantity || 0;
-      etaRow.spend += record.purchase_total || 0;
-      etaRow.payout += record.payout_total || 0;
-      etaRow.profit += record.profit || 0;
+      etaRow.units += accountingQuantity(record);
+      etaRow.spend += accountingPurchase(record);
+      etaRow.payout += accountingPayout(record);
+      etaRow.profit += accountingProfit(record);
       etaRow.open_payout += openPayout(record);
     }
 
@@ -621,10 +641,10 @@ function summarize(records, addons = []) {
     }
     const accountRow = accounts.get(record.account);
     accountRow.orders += 1;
-    accountRow.profit += record.profit || 0;
+    accountRow.profit += accountingProfit(record);
     if (activeRecord(record)) {
-      accountRow.spend += record.purchase_total || 0;
-      accountRow.payout += record.payout_total || 0;
+      accountRow.spend += accountingPurchase(record);
+      accountRow.payout += accountingPayout(record);
     }
 
     if (!items.has(record.item_name)) {
@@ -632,10 +652,10 @@ function summarize(records, addons = []) {
     }
     const itemRow = items.get(record.item_name);
     itemRow.orders += 1;
-    itemRow.units += record.quantity || 0;
-    itemRow.profit += record.profit || 0;
+    itemRow.units += accountingQuantity(record);
+    itemRow.profit += accountingProfit(record);
     if (activeRecord(record)) {
-      itemRow.spend += record.purchase_total || 0;
+      itemRow.spend += accountingPurchase(record);
     }
   }
 
@@ -658,15 +678,15 @@ function summarize(records, addons = []) {
     dayRow.addon_profit += amount;
   }
 
-  const payout = active.reduce((sum, record) => sum + (record.payout_total || 0), 0);
-  const cashPaid = records.reduce((sum, record) => sum + (record.amount_paid || 0), 0);
-  const spend = active.reduce((sum, record) => sum + (record.purchase_total || 0), 0);
-  const productProfit = records.reduce((sum, record) => sum + (record.profit || 0), 0);
+  const payout = active.reduce((sum, record) => sum + accountingPayout(record), 0);
+  const cashPaid = records.reduce((sum, record) => sum + accountingPaid(record), 0);
+  const spend = active.reduce((sum, record) => sum + accountingPurchase(record), 0);
+  const productProfit = records.reduce((sum, record) => sum + accountingProfit(record), 0);
   const addonProfit = visibleAddons.reduce((sum, addon) => sum + (Number(addon.amount) || 0), 0);
   const addonCategoryTotals = categoryTotals(visibleAddons);
   const bfmrReferralProfit = records
     .filter((record) => String(record.item_name || "").trim().toLowerCase() === "referral bonus")
-    .reduce((sum, record) => sum + (Number(record.profit) || 0), 0);
+    .reduce((sum, record) => sum + accountingProfit(record), 0);
   const profit = productProfit + addonProfit;
   const returnRows = records.filter(returnRelevant);
   const returnReviewRows = records.filter(returnReviewNeeded);
@@ -687,7 +707,7 @@ function summarize(records, addons = []) {
   const preciseCashbackRows = active.filter(preciseCashback).length;
   const weightedCashback = spend
     ? active.reduce(
-        (sum, record) => sum + (Number(record.purchase_total || 0) * Number(record.cashback_rate || 0)),
+        (sum, record) => sum + (accountingPurchase(record) * Number(record.cashback_rate || 0)),
         0,
       ) / spend
     : 0;
@@ -712,7 +732,7 @@ function summarize(records, addons = []) {
     orders: records.length,
     active_orders: active.length,
     paid_orders: active.filter((record) => record.status === "Paid").length,
-    units: active.reduce((sum, record) => sum + (record.quantity || 0), 0),
+    units: active.reduce((sum, record) => sum + accountingQuantity(record), 0),
     spend,
     payout,
     profit,
@@ -722,9 +742,9 @@ function summarize(records, addons = []) {
     return_rows: returnRows.length,
     return_review_rows: returnReviewRows.length,
     inferred_split_rows: inferredSplitRows.length,
-    return_spend: returnRows.reduce((sum, record) => sum + (Number(record.purchase_total) || 0), 0),
-    return_payout: returnRows.reduce((sum, record) => sum + (Number(record.payout_total) || 0), 0),
-    return_profit: returnRows.reduce((sum, record) => sum + (Number(record.profit) || 0), 0),
+    return_spend: returnRows.reduce((sum, record) => sum + accountingPurchase(record), 0),
+    return_payout: returnRows.reduce((sum, record) => sum + accountingPayout(record), 0),
+    return_profit: returnRows.reduce((sum, record) => sum + accountingProfit(record), 0),
     addons: visibleAddons,
     addon_category_totals: addonCategoryTotals,
     amazon_orders: dataset?.amazon_orders || [],
@@ -752,8 +772,8 @@ function summarize(records, addons = []) {
       .sort((a, b) => b.profit - a.profit)
       .slice(0, 8),
     watchlist: watchlist.slice(0, 10),
-    top_orders: [...records].sort((a, b) => (b.profit || 0) - (a.profit || 0)).slice(0, 8),
-    top_spend: [...active].sort((a, b) => (b.purchase_total || 0) - (a.purchase_total || 0)).slice(0, 8),
+    top_orders: [...records].sort((a, b) => accountingProfit(b) - accountingProfit(a)).slice(0, 8),
+    top_spend: [...active].sort((a, b) => accountingPurchase(b) - accountingPurchase(a)).slice(0, 8),
     best_month: monthlyRows.length ? [...monthlyRows].sort((a, b) => b.profit - a.profit)[0] : null,
     last_month: lastMonth || null,
     previous_month: previousMonth || null,
@@ -1343,15 +1363,15 @@ function renderAttention(summary) {
   renderCompactList(
     elements.topOrders,
     summary.top_orders,
-    (record) => money(record.profit),
+    (record) => money(accountingProfit(record)),
     (record) => `${fmtDate(record.date)} | ${record.account} | ${record.status}`,
     "No profit rows in this view",
   );
   renderCompactList(
     elements.topSpend,
     summary.top_spend,
-    (record) => money(record.purchase_total),
-    (record) => `${fmtDate(record.date)} | ${number.format(record.quantity)} units | ${record.account}`,
+    (record) => money(accountingPurchase(record)),
+    (record) => `${fmtDate(record.date)} | ${number.format(accountingQuantity(record))} units | ${record.account}`,
     "No spend rows in this view",
   );
 }
@@ -1400,12 +1420,13 @@ function renderReturns(summary, records) {
                     <div class="return-row">
                       <div>
                         <div class="compact-title" title="${escapeHtml(record.item_name)}">${escapeHtml(record.item_name)}</div>
-                        <div class="compact-meta">${escapeHtml(`${fmtDate(record.date)} | ${record.status} | Qty ${number.format(record.quantity || 0)} | ${record.order_number || "No order"}${inferred}${candidates}`)}</div>
+                        <div class="compact-meta">${escapeHtml(`${fmtDate(record.date)} | ${record.status} | Qty ${number.format(accountingQuantity(record))} counted / ${number.format(record.quantity || 0)} BFMR | ${record.order_number || "No order"}${inferred}${candidates}`)}</div>
                         ${context ? `<div class="return-note">${escapeHtml(context)}</div>` : ""}
+                        ${record.accounting_reason ? `<div class="return-note">${escapeHtml(record.accounting_reason)}</div>` : ""}
                       </div>
                       <div class="return-row-money">
-                        <span>${money(record.purchase_total)} retail</span>
-                        <strong>${money(record.profit)}</strong>
+                        <span>${money(accountingPurchase(record))} counted retail</span>
+                        <strong>${money(accountingProfit(record))}</strong>
                       </div>
                     </div>
                   `;
@@ -1424,7 +1445,7 @@ function renderReturns(summary, records) {
     (record) => (record.order_number ? "Ambiguous" : "No order"),
     (record) => {
       const candidates = Array.isArray(record.split_candidate_orders) ? ` | ${record.split_candidate_orders.join(", ")}` : "";
-      return `${fmtDate(record.date)} | ${record.status} | ${money(record.purchase_total)} retail${candidates}`;
+      return `${fmtDate(record.date)} | ${record.status} | ${money(accountingPurchase(record))} counted retail${candidates}`;
     },
     "No return rows need review in this view",
   );
@@ -1485,6 +1506,21 @@ const tableColumns = [
   },
   { id: "account", label: "Account", cell: (record) => escapeHtml(record.account) },
   { id: "profit", label: "Profit", className: "num", cell: (record) => money(record.profit) },
+  {
+    id: "accounting_profit",
+    label: "Counted Profit",
+    className: "num",
+    cell: (record) =>
+      `<span title="${escapeHtml(record.accounting_reason || "Counted as BFMR row")}">${money(accountingProfit(record))}</span>`,
+  },
+  {
+    id: "accounting",
+    label: "Accounting",
+    cell: (record) =>
+      record.accounting_excluded
+        ? `<span class="pill cancelled">Excluded</span>`
+        : `<span class="pill matched">${escapeHtml(record.accounting_reason || "Counted")}</span>`,
+  },
   {
     id: "amazon",
     label: "Amazon",
@@ -1584,10 +1620,10 @@ function renderTable(records) {
             <span class="pill ${sourceClass(record.price_source)}">${escapeHtml(record.price_source)}</span>
           </div>
           <div class="order-card-grid">
-            <div class="mini-stat"><div class="mini-label">Profit</div><div class="mini-value">${money(record.profit)}</div></div>
+            <div class="mini-stat"><div class="mini-label">Profit</div><div class="mini-value">${money(accountingProfit(record))}</div></div>
             <div class="mini-stat"><div class="mini-label">Cashback</div><div class="mini-value">${percent.format(Number(record.cashback_rate || 0))}</div></div>
-            <div class="mini-stat"><div class="mini-label">Spend</div><div class="mini-value">${money(record.purchase_total)}</div></div>
-            <div class="mini-stat"><div class="mini-label">Payout</div><div class="mini-value">${money(record.payout_total)}</div></div>
+            <div class="mini-stat"><div class="mini-label">Spend</div><div class="mini-value">${money(accountingPurchase(record))}</div></div>
+            <div class="mini-stat"><div class="mini-label">Payout</div><div class="mini-value">${money(accountingPayout(record))}</div></div>
             <div class="mini-stat"><div class="mini-label">Open</div><div class="mini-value">${money(openPayout(record))}</div></div>
             <div class="mini-stat"><div class="mini-label">Order</div><div class="mini-value">${escapeHtml(record.order_number || "Unknown")}</div></div>
             <div class="mini-stat"><div class="mini-label">Tracking</div><div class="mini-value">${escapeHtml(record.tracking || "Missing")}</div></div>

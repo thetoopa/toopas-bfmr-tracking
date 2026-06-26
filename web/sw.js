@@ -1,9 +1,9 @@
-const CACHE_NAME = "toopa-bfmr-v31";
+const CACHE_NAME = "toopa-bfmr-v32";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=20260626-20",
-  "/app.js?v=20260626-20",
+  "/styles.css?v=20260626-21",
+  "/app.js?v=20260626-21",
   "/extractors/bfmr-manual-extractor.js",
   "/extractors/amazon-manual-extractor.js",
   "/manifest.webmanifest",
