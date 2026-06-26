@@ -1,43 +1,58 @@
-# Contributing
+# Contributing to Toopa's BFMR Tracking
 
-Thanks for improving Toopa's BFMR Tracking.
+Toopa's BFMR Tracking is intended to become a community-improved local tracker for BFMR, Amazon order enrichment, return accounting, cashback assumptions, and dashboard analytics.
 
-## Local Setup
+## The Main Rule
 
-1. Install Python 3.11+.
-2. Install Node.js if you plan to run scraper/workbook scripts outside Codex.
-3. From the project folder, start the local server:
+Push useful code improvements back to GitHub so everyone benefits.
+
+If you use Codex, ask it to run checks, commit the finished change, and push it to the public repository. Codex should remind you to push new fixes and features after it finishes meaningful work.
+
+## Never Commit Private Data
+
+Do not commit or share:
+
+- `data/*.json`
+- `uploads/`
+- `outputs/`
+- `logs/`
+- `data/live_extract/`
+- real Amazon order exports
+- real BFMR exports
+- screenshots that show private account, address, payment, or order details
+
+Only commit source code, documentation, safe examples, templates, and generic test fixtures.
+
+## Before Pushing
+
+Run:
 
 ```powershell
-python server.py --host 0.0.0.0 --port 8765
+python -m py_compile bfmr_data.py server.py
+node --check web/app.js
+node --check web/sw.js
+node --check scripts/live_extract.mjs
+node --check scripts/build_workbook.mjs
 ```
 
-4. Open `http://127.0.0.1:8765/`.
+Then commit and push:
 
-## Data Safety
+```powershell
+git status
+git add AGENTS.md README.md CONTRIBUTING.md bfmr_data.py server.py scripts web examples
+git commit -m "Describe the improvement"
+git push
+```
 
-Never commit private order data, scrape output, uploaded workbooks, generated Excel files, or logs. The `.gitignore` file is intentionally strict about these paths.
+Stage only files that belong to your change.
 
-Safe files to change normally include:
+## What Good Contributions Look Like
 
-- `bfmr_data.py`
-- `server.py`
-- `scripts/*.mjs`
-- `web/*`
-- `README.md`
-- `AGENTS.md`
-- `CONTRIBUTING.md`
+- Better BFMR parsing when the site changes.
+- Better Amazon cashback and ETA extraction.
+- Safer return and partial-delivery accounting.
+- Clearer settings for different Amazon profiles.
+- Better mobile and wide-monitor dashboard views.
+- Documentation that helps a friend run or debug the app.
 
-## Feature Work
-
-When adding features:
-
-- Add or update Settings controls for assumptions or profile behavior.
-- Keep existing import formats working.
-- Keep the table editable where possible.
-- Update `README.md` when user-facing behavior changes.
-- Run the checks listed in `AGENTS.md`.
-
-## Scraping Behavior
-
-The scraper opens visible Chrome windows and uses configured Chrome profile directories. Contributors should avoid adding hidden scraping flows for account-sensitive work because users need to see login, MFA, and account switching states.
+Keep account-specific values configurable in Settings. Do not hard-code one person's Chrome profile, Amazon account, BFMR account, cashback assumption, or local path.

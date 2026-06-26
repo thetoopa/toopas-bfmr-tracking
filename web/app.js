@@ -145,6 +145,12 @@ const elements = {
   etaTotalsCount: document.getElementById("etaTotalsCount"),
   topOrders: document.getElementById("topOrders"),
   topSpend: document.getElementById("topSpend"),
+  returnsStatus: document.getElementById("returnsStatus"),
+  returnsSummary: document.getElementById("returnsSummary"),
+  returnsCount: document.getElementById("returnsCount"),
+  returnsList: document.getElementById("returnsList"),
+  returnReviewCount: document.getElementById("returnReviewCount"),
+  returnReviewList: document.getElementById("returnReviewList"),
   addonForm: document.getElementById("addonForm"),
   addonButton: document.getElementById("addonButton"),
   addonTotal: document.getElementById("addonTotal"),
@@ -273,6 +279,56 @@ function openPayout(record) {
   return Math.max((record.payout_total || 0) - (record.amount_paid || 0), 0);
 }
 
+function hasAmazonOrderNumber(value) {
+  return /^\d{3}-\d{7}-\d{7}$/.test(String(value || "").trim());
+}
+
+function returnRelevant(record) {
+  const status = String(record.status || "").toLowerCase();
+  return Boolean(
+    activeRecord(record) &&
+      !String(record.item_name || "").trim().toLowerCase().includes("referral bonus") &&
+      (status === "return" ||
+        status === "deadline" ||
+        record.order_number_inferred ||
+        record.return_context ||
+        record.split_review_needed ||
+        (!hasAmazonOrderNumber(record.order_number) && Number(record.purchase_total || 0) > 0)),
+  );
+}
+
+function returnReviewNeeded(record) {
+  return Boolean(
+    activeRecord(record) &&
+      !String(record.item_name || "").trim().toLowerCase().includes("referral bonus") &&
+      (record.split_review_needed || (!hasAmazonOrderNumber(record.order_number) && Number(record.purchase_total || 0) > 0)),
+  );
+}
+
+function returnGroups(records) {
+  const groups = new Map();
+  for (const record of records.filter(returnRelevant)) {
+    const key = record.return_group_key || record.order_number || `review-${record.id}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        rows: [],
+        spend: 0,
+        payout: 0,
+        profit: 0,
+        open: 0,
+      });
+    }
+    const group = groups.get(key);
+    group.rows.push(record);
+    group.spend += Number(record.purchase_total || 0);
+    group.payout += Number(record.payout_total || 0);
+    group.profit += Number(record.profit || 0);
+    group.open += openPayout(record);
+  }
+  return [...groups.values()].sort((a, b) => compareDate(b.rows[0]?.date, a.rows[0]?.date) || compareText(a.key, b.key));
+}
+
 function lifecycleStage(record) {
   if (!activeRecord(record)) return "cancelled";
   const status = String(record.status || "").toLowerCase();
@@ -315,6 +371,9 @@ function recordSearchText(record) {
     record.cashback_rate,
     record.cashback_rate_source,
     record.account_source,
+    record.return_context,
+    record.split_review_reason,
+    Array.isArray(record.split_candidate_orders) ? record.split_candidate_orders.join(" ") : "",
     record.amazon_profile,
     record.amazon_payment_method,
     record.amazon_reward_text,
@@ -609,6 +668,9 @@ function summarize(records, addons = []) {
     .filter((record) => String(record.item_name || "").trim().toLowerCase() === "referral bonus")
     .reduce((sum, record) => sum + (Number(record.profit) || 0), 0);
   const profit = productProfit + addonProfit;
+  const returnRows = records.filter(returnRelevant);
+  const returnReviewRows = records.filter(returnReviewNeeded);
+  const inferredSplitRows = records.filter((record) => record.order_number_inferred);
   const amazonRelevant = active.filter((record) => record.order_number && String(record.order_number).split("-").length === 3);
   const amazonMatched = amazonRelevant.filter((record) => record.amazon_order_matched).length;
   const amazonUnmatched = amazonRelevant.filter((record) => !record.amazon_order_matched).length;
@@ -657,6 +719,12 @@ function summarize(records, addons = []) {
     product_profit: productProfit,
     addon_profit: addonProfit,
     bfmr_referral_profit: bfmrReferralProfit + (addonCategoryTotals.bfmr_referral || 0),
+    return_rows: returnRows.length,
+    return_review_rows: returnReviewRows.length,
+    inferred_split_rows: inferredSplitRows.length,
+    return_spend: returnRows.reduce((sum, record) => sum + (Number(record.purchase_total) || 0), 0),
+    return_payout: returnRows.reduce((sum, record) => sum + (Number(record.payout_total) || 0), 0),
+    return_profit: returnRows.reduce((sum, record) => sum + (Number(record.profit) || 0), 0),
     addons: visibleAddons,
     addon_category_totals: addonCategoryTotals,
     amazon_orders: dataset?.amazon_orders || [],
@@ -765,9 +833,12 @@ function renderMetadata() {
   elements.metadata.textContent = `${dataset.records.length} rows loaded${addonText}${amazonText} | Updated ${generatedText}`;
 }
 
-function kpi(label, value, sub = "") {
+function kpi(label, value, sub = "", action = "") {
+  const actionAttrs = action
+    ? ` data-kpi-action="${escapeHtml(action)}" role="button" tabindex="0" title="Open ${escapeHtml(label)}"`
+    : "";
   return `
-    <article class="kpi-card">
+    <article class="kpi-card ${action ? "clickable" : ""}"${actionAttrs}>
       <div class="kpi-label">${escapeHtml(label)}</div>
       <div class="kpi-value">${escapeHtml(value)}</div>
       <div class="kpi-sub">${escapeHtml(sub)}</div>
@@ -792,14 +863,16 @@ function renderKpis(summary) {
       "Amazon Line Items",
       `${wholeNumber.format(summary.amazon_matched)} / ${wholeNumber.format(summary.orders)}`,
       `${wholeNumber.format(summary.precise_cashback)} with visible cashback evidence`,
+      "amazon_needed",
     ),
     kpi("Avg Cashback", percent.format(summary.weighted_cashback), "Weighted by active purchase spend"),
     kpi("Add-on Profit", money(summary.addon_profit), `${wholeNumber.format(summary.addons.length)} manual bonus rows`),
     kpi("Expected Payout", money(summary.payout), "Earned only after processing, then paid later"),
-    kpi("Paid Cash", money(summary.cash_paid), `${percent.format(summary.payout ? summary.cash_paid / summary.payout : 0)} of expected payout collected`),
-    kpi("Awaiting Pay", money(summary.open_payout), "Reserved through processed rows not fully paid"),
-    kpi("Tracking Gaps", wholeNumber.format(summary.missing_tracking), "Blank or not submitted tracking"),
-    kpi("Price Fallbacks", wholeNumber.format(summary.estimated_purchase_rows), "Rows using payout as purchase estimate"),
+    kpi("Paid Cash", money(summary.cash_paid), `${percent.format(summary.payout ? summary.cash_paid / summary.payout : 0)} of expected payout collected`, "paid_cash"),
+    kpi("Awaiting Pay", money(summary.open_payout), "Reserved through processed rows not fully paid", "awaiting_pay"),
+    kpi("Returns", wholeNumber.format(summary.return_rows), `${wholeNumber.format(summary.return_review_rows)} need review`, "returns"),
+    kpi("Tracking Gaps", wholeNumber.format(summary.missing_tracking), "Blank or not submitted tracking", "tracking_gaps"),
+    kpi("Price Fallbacks", wholeNumber.format(summary.estimated_purchase_rows), "Rows using payout as purchase estimate", "price_fallbacks"),
   ].join("");
 }
 
@@ -1283,6 +1356,80 @@ function renderAttention(summary) {
   );
 }
 
+function renderReturns(summary, records) {
+  if (!elements.returnsList) return;
+  const affected = records.filter(returnRelevant);
+  const reviewRows = records.filter(returnReviewNeeded);
+  const groups = returnGroups(records);
+
+  elements.returnsStatus.textContent = `${wholeNumber.format(affected.length)} affected rows | ${wholeNumber.format(reviewRows.length)} need review`;
+  elements.returnsCount.textContent = `${wholeNumber.format(groups.length)} groups`;
+  elements.returnReviewCount.textContent = `${wholeNumber.format(reviewRows.length)} rows`;
+  elements.returnsSummary.innerHTML = [
+    kpi("Affected Rows", wholeNumber.format(affected.length), "Returns, inferred splits, and missing-order rows"),
+    kpi("Needs Review", wholeNumber.format(reviewRows.length), "Ambiguous rows where the app refused to guess"),
+    kpi("Inferred Splits", wholeNumber.format(summary.inferred_split_rows), "Original order filled from same-item evidence"),
+    kpi("Return Spend", money(summary.return_spend), "Retail price tied to affected rows"),
+    kpi("Return Payout", money(summary.return_payout), "BFMR subtotal tied to affected rows"),
+    kpi("Return Profit", money(summary.return_profit), "Profit impact in the current filters"),
+  ].join("");
+
+  if (!groups.length) {
+    elements.returnsList.innerHTML = `<p class="muted">No return or split-delivery rows in this view.</p>`;
+  } else {
+    elements.returnsList.innerHTML = groups
+      .map((group) => {
+        const first = group.rows[0] || {};
+        const title = group.key.startsWith("review-") ? first.item_name || "Needs review" : group.key;
+        return `
+          <article class="return-group">
+            <div class="return-group-head">
+              <div>
+                <div class="return-title">${escapeHtml(title)}</div>
+                <div class="return-meta">${wholeNumber.format(group.rows.length)} rows | ${money(group.spend)} retail | ${money(group.payout)} payout | ${money(group.open)} open</div>
+              </div>
+              <div class="return-profit ${group.profit < 0 ? "negative" : ""}">${money(group.profit)}</div>
+            </div>
+            <div class="return-row-list">
+              ${group.rows
+                .map((record) => {
+                  const candidates = Array.isArray(record.split_candidate_orders) ? ` | Candidates: ${record.split_candidate_orders.join(", ")}` : "";
+                  const inferred = record.order_number_inferred ? " | Inferred original order" : "";
+                  const context = record.return_context || record.split_review_reason || "";
+                  return `
+                    <div class="return-row">
+                      <div>
+                        <div class="compact-title" title="${escapeHtml(record.item_name)}">${escapeHtml(record.item_name)}</div>
+                        <div class="compact-meta">${escapeHtml(`${fmtDate(record.date)} | ${record.status} | Qty ${number.format(record.quantity || 0)} | ${record.order_number || "No order"}${inferred}${candidates}`)}</div>
+                        ${context ? `<div class="return-note">${escapeHtml(context)}</div>` : ""}
+                      </div>
+                      <div class="return-row-money">
+                        <span>${money(record.purchase_total)} retail</span>
+                        <strong>${money(record.profit)}</strong>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  renderCompactList(
+    elements.returnReviewList,
+    reviewRows,
+    (record) => (record.order_number ? "Ambiguous" : "No order"),
+    (record) => {
+      const candidates = Array.isArray(record.split_candidate_orders) ? ` | ${record.split_candidate_orders.join(", ")}` : "";
+      return `${fmtDate(record.date)} | ${record.status} | ${money(record.purchase_total)} retail${candidates}`;
+    },
+    "No return rows need review in this view",
+  );
+}
+
 function inputValue(value) {
   return escapeHtml(value ?? "");
 }
@@ -1466,6 +1613,7 @@ function renderAll() {
   renderInsights(summary);
   renderAnalytics(summary);
   renderAttention(summary);
+  renderReturns(summary, records);
   renderTable(records);
 }
 
@@ -1632,6 +1780,46 @@ function setQuickFilter(chip) {
   renderAll();
 }
 
+function applyKpiAction(action) {
+  if (!action) return;
+  state = {
+    ...state,
+    status: "all",
+    account: "all",
+    priceSource: "all",
+    tracking: "all",
+    payment: "all",
+    amazon: "all",
+    search: "",
+  };
+  if (action === "tracking_gaps") {
+    state.tracking = "missing";
+    state.tab = "orders";
+  }
+  if (action === "price_fallbacks") {
+    state.priceSource = "Payout fallback";
+    state.tab = "orders";
+  }
+  if (action === "amazon_needed") {
+    state.amazon = "unmatched";
+    state.tab = "orders";
+  }
+  if (action === "awaiting_pay") {
+    state.payment = "open";
+    state.tab = "orders";
+  }
+  if (action === "paid_cash") {
+    state.payment = "paid";
+    state.tab = "orders";
+  }
+  if (action === "returns") {
+    state.tab = "returns";
+  }
+  syncControlValues();
+  renderAll();
+  setActiveTab(state.tab);
+}
+
 async function copyExtractorScript(path, label) {
   try {
     const response = await fetch(path, { cache: "no-store" });
@@ -1689,6 +1877,20 @@ elements.quickChips.addEventListener("click", (event) => {
   const button = event.target.closest("[data-chip]");
   if (!button) return;
   setQuickFilter(button.dataset.chip);
+});
+
+elements.kpiGrid.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-kpi-action]");
+  if (!card) return;
+  applyKpiAction(card.dataset.kpiAction);
+});
+
+elements.kpiGrid.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const card = event.target.closest("[data-kpi-action]");
+  if (!card) return;
+  event.preventDefault();
+  applyKpiAction(card.dataset.kpiAction);
 });
 
 if (elements.columnPrefsButton) {

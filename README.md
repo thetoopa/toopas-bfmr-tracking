@@ -53,6 +53,8 @@ Private local data such as `data/*.json`, scrape logs, uploads, and generated wo
 
 Read `AGENTS.md` before using Codex or another coding agent on this project. It documents the project invariants that should not be broken.
 
+See `CONTRIBUTING.md` before pushing changes. The short version: keep private data out of git, run checks, and push useful improvements back to GitHub so the shared tracker keeps getting better.
+
 Run checks:
 
 ```powershell

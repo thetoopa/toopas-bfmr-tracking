@@ -9,11 +9,12 @@ This project is a local-first BFMR/Amazon tracking dashboard. Keep it useful for
 - Keep Chrome profiles configurable through the Settings tab. Do not hard-code one person's profile names.
 - Keep cashback/account assumptions editable in Settings.
 - Keep both scrape modes:
-  - Normal update skips paid orders unless ETA needs refresh.
+  - Normal update scrapes all orders not yet in paid status and updates relevant information.
   - One-time all refresh includes paid orders and all non-cancelled BFMR orders.
 - Keep cancelled BFMR rows hidden by default from normal views.
 - Keep the BFMR-style table as the main view.
 - Keep PWA/mobile support working.
+- When useful improvements are made, remind the user to commit and push them to GitHub so the community version stays current.
 
 ## Development Checks
 
@@ -40,3 +41,7 @@ If the bundled Codex Node path is unavailable, use a local Node.js installation 
 ## Data Model Notes
 
 `bfmr_data.py` is the normalization and enrichment layer. `server.py` is the local API and static file server. `scripts/live_extract.mjs` owns visible Chrome/Playwright extraction. `web/app.js` owns client-side filtering, charts, settings, and table editing.
+
+## Community Loop
+
+This project is meant to improve through real BFMR/Amazon edge cases. If Codex adds a feature, fixes scraping, improves accounting logic, or updates UI behavior, it should remind the user to push those changes to GitHub after checks pass. Do not push private data; only code, docs, examples, and safe templates belong in the public repository.

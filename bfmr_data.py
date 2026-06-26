@@ -412,6 +412,8 @@ def apply_amazon_enrichment(
     no_order_rate = assumption_float(settings, "no_order_cashback_rate", default_rate)
     no_order_account = clean_text(settings.get("assumptions", {}).get("no_order_account")) or "Personal"
     enriched = deepcopy(dataset)
+    infer_partial_return_details(enriched.get("records", []))
+    infer_split_return_details(enriched.get("records", []))
     orders_by_number = {
         normalize_order_number(order.get("order_number")): order
         for order in amazon_orders
@@ -653,7 +655,7 @@ def infer_partial_return_details(records: list[dict[str, Any]]) -> None:
     for record in records:
         status = clean_text(record.get("status")).lower()
         order_number = normalize_order_number(record.get("order_number"))
-        if status in {"cancelled", "return"} or not has_amazon_order_number(order_number):
+        if status == "cancelled" or not has_amazon_order_number(order_number):
             continue
         candidates_by_item[normalize_text(record.get("item_name"))].append(record)
 
@@ -705,6 +707,77 @@ def infer_partial_return_details(records: list[dict[str, Any]]) -> None:
                 ),
                 2,
             )
+
+
+def infer_split_return_details(records: list[dict[str, Any]]) -> None:
+    candidates_by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        status = clean_text(record.get("status")).lower()
+        order_number = normalize_order_number(record.get("order_number"))
+        if status == "cancelled" or not has_amazon_order_number(order_number):
+            continue
+        candidates_by_item[normalize_text(record.get("item_name"))].append(record)
+
+    for record in records:
+        record.pop("split_review_needed", None)
+        record.pop("split_review_reason", None)
+        record.pop("split_candidate_orders", None)
+        record.pop("return_group_key", None)
+        record.pop("return_context", None)
+
+    for record in records:
+        status = clean_text(record.get("status")).lower()
+        if status == "cancelled" or is_referral_bonus_item(record.get("item_name")):
+            continue
+        item_key = normalize_text(record.get("item_name"))
+        candidates = [candidate for candidate in candidates_by_item.get(item_key, []) if candidate is not record]
+        if not candidates:
+            continue
+
+        if has_amazon_order_number(record.get("order_number")):
+            order_number = normalize_order_number(record.get("order_number"))
+            related = [candidate for candidate in candidates if normalize_order_number(candidate.get("order_number")) == order_number]
+            related_statuses = {clean_text(candidate.get("status")).lower() for candidate in related}
+            if status in {"return", "deadline"} or related_statuses.intersection({"return", "deadline"}):
+                record["return_group_key"] = order_number
+                record["return_context"] = "Return/split group with matching same-item order rows"
+            continue
+
+        record_date = parse_date(record.get("date"))
+        dated_candidates = candidates
+        if record_date:
+            row_date = date.fromisoformat(record_date)
+            dated_candidates = []
+            for candidate in candidates:
+                candidate_date = parse_date(candidate.get("date"))
+                if not candidate_date:
+                    continue
+                days = (row_date - date.fromisoformat(candidate_date)).days
+                if -1 <= days <= 21:
+                    dated_candidates.append(candidate)
+            if not dated_candidates:
+                dated_candidates = candidates
+
+        order_numbers = sorted(
+            {
+                normalize_order_number(candidate.get("order_number"))
+                for candidate in dated_candidates
+                if has_amazon_order_number(candidate.get("order_number"))
+            }
+        )
+        if len(order_numbers) == 1:
+            inferred_order = order_numbers[0]
+            record["order_number"] = inferred_order
+            record["order_number_inferred"] = True
+            record["return_group_key"] = inferred_order
+            record["return_context"] = "Inferred from same-item split/return row"
+            record["account"] = account_from_order(inferred_order)
+            record["account_source"] = "Inferred from same-item split/return row"
+        elif len(order_numbers) > 1:
+            record["split_review_needed"] = True
+            record["split_review_reason"] = "Multiple same-item Amazon orders are plausible; original order was not inferred"
+            record["split_candidate_orders"] = order_numbers
+            record["return_context"] = "Needs manual original-order review"
 
 
 def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -> dict[str, Any]:
@@ -768,6 +841,7 @@ def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -
         )
 
     infer_partial_return_details(records)
+    infer_split_return_details(records)
     records.sort(key=lambda record: (record["date"] or "", record["source_row"]), reverse=True)
     for index, record in enumerate(records, start=1):
         record["id"] = index
@@ -856,6 +930,7 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
         )
 
     infer_partial_return_details(records)
+    infer_split_return_details(records)
     records.sort(key=lambda record: (record["date"] or "", record["source_row"]), reverse=True)
     for index, record in enumerate(records, start=1):
         record["id"] = index
@@ -942,6 +1017,7 @@ def normalize_gus_tracking_sheet(tracker_sheet: Path) -> dict[str, Any]:
         )
 
     infer_partial_return_details(records)
+    infer_split_return_details(records)
     records.sort(key=lambda record: (record["date"] or "", record["source_row"]), reverse=True)
     for index, record in enumerate(records, start=1):
         record["id"] = index

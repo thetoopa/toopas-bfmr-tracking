@@ -28,7 +28,7 @@
         <div>
           <h1>Toopa's BFMR Tracking</h1>
           <p id="metadata" class="metadata">Loading data...</p>
-          <p class="build-marker">Build 20260626-19 | Synced analytics filters</p>
+          <p class="build-marker">Build 20260626-20 | Return accounting beta</p>
         </div>
       </div>
       <div class="header-actions">
@@ -44,6 +44,7 @@
         <button class="tab-button" type="button" data-tab="orders">Orders</button>
         <button class="tab-button" type="button" data-tab="analytics">Analytics</button>
         <button class="tab-button" type="button" data-tab="money">Money</button>
+        <button class="tab-button" type="button" data-tab="returns">Returns</button>
         <button class="tab-button" type="button" data-tab="operations">Operations</button>
         <button class="tab-button" type="button" data-tab="settings">Settings</button>
       </nav>
@@ -355,6 +356,30 @@
         </article>
       </section>
 
+      <section id="returnsPanel" class="returns-panel tab-panel" data-tab-panel="returns" aria-label="Returns and split deliveries">
+        <div class="panel-heading">
+          <h2>Returns & Split Deliveries</h2>
+          <span id="returnsStatus">Finding partial returns, missing orders, and manual-review rows.</span>
+        </div>
+        <div id="returnsSummary" class="return-summary-grid"></div>
+        <div class="returns-grid">
+          <article class="panel wide">
+            <div class="panel-heading">
+              <h2>Affected Rows</h2>
+              <span id="returnsCount"></span>
+            </div>
+            <div id="returnsList" class="return-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <h2>Needs Review</h2>
+              <span id="returnReviewCount"></span>
+            </div>
+            <div id="returnReviewList" class="compact-list"></div>
+          </article>
+        </div>
+      </section>
+
       <section id="settings" class="settings-panel tab-panel" data-tab-panel="settings" aria-label="Settings">
         <div class="panel-heading">
           <h2>Settings</h2>
@@ -413,6 +438,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=20260626-19"></script>
+    <script src="/app.js?v=20260626-20"></script>
   </body>
 </html>
