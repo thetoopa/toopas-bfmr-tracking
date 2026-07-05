@@ -1,6 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
+import { pathToFileURL } from "node:url";
+
+const { SpreadsheetFile, Workbook } = await loadArtifactTool();
+
+async function loadArtifactTool() {
+  try {
+    return await import("@oai/artifact-tool");
+  } catch (error) {
+    const extraNodeModules = [
+      process.env.ARTIFACT_TOOL_NODE_MODULES,
+      process.env.WORKSPACE_NODE_MODULES,
+    ].filter(Boolean);
+    for (const nodeModulesPath of extraNodeModules) {
+      try {
+        return await import(pathToFileURL(path.join(nodeModulesPath, "@oai", "artifact-tool", "dist", "artifact_tool.mjs")).href);
+      } catch {
+        // Try the next configured runtime path.
+      }
+    }
+    throw error;
+  }
+}
 
 const datasetPath = path.resolve("data", "bfmr_records.json");
 const addonsPath = path.resolve("data", "profit_addons.json");

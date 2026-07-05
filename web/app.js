@@ -84,6 +84,11 @@ const defaultSettings = {
   },
   chrome: {
     bfmr_profile_directory: "Default",
+    user_data_dir: "",
+    chrome_exe: "",
+    close_existing_chrome: false,
+    clone_profiles_for_automation: true,
+    automation_user_data_dir: "",
     skip_paid_orders: true,
     profiles: [
       { id: "personal-default", name: "Personal Amazon", profile_directory: "Default", account_type: "personal", enabled: true },
@@ -189,6 +194,10 @@ const elements = {
   businessDefaultCashbackRate: document.getElementById("businessDefaultCashbackRate"),
   manualAssumptionsJson: document.getElementById("manualAssumptionsJson"),
   bfmrProfileDirectory: document.getElementById("bfmrProfileDirectory"),
+  chromeUserDataDir: document.getElementById("chromeUserDataDir"),
+  chromeExe: document.getElementById("chromeExe"),
+  closeExistingChrome: document.getElementById("closeExistingChrome"),
+  cloneProfilesForAutomation: document.getElementById("cloneProfilesForAutomation"),
   skipPaidOrders: document.getElementById("skipPaidOrders"),
   settingsProfiles: document.getElementById("settingsProfiles"),
   addProfileButton: document.getElementById("addProfileButton"),
@@ -1698,6 +1707,10 @@ function renderSettings() {
   elements.businessDefaultCashbackRate.value = rateToPercentInput(assumptions.business_default_cashback_rate);
   elements.manualAssumptionsJson.value = JSON.stringify(assumptions.manual_assumed_orders || [], null, 2);
   elements.bfmrProfileDirectory.innerHTML = profileOptionsHtml(chrome.bfmr_profile_directory || "Default");
+  elements.chromeUserDataDir.value = chrome.user_data_dir || "";
+  elements.chromeExe.value = chrome.chrome_exe || "";
+  elements.closeExistingChrome.checked = Boolean(chrome.close_existing_chrome);
+  elements.cloneProfilesForAutomation.checked = chrome.clone_profiles_for_automation !== false;
   elements.skipPaidOrders.checked = Boolean(chrome.skip_paid_orders);
   elements.settingsProfiles.innerHTML = (chrome.profiles || [])
     .map(
@@ -1772,7 +1785,12 @@ function readSettingsForm() {
       manual_assumed_orders: manualRows,
     },
     chrome: {
+      ...settingsState.chrome,
       bfmr_profile_directory: elements.bfmrProfileDirectory.value.trim() || "Default",
+      user_data_dir: elements.chromeUserDataDir.value.trim(),
+      chrome_exe: elements.chromeExe.value.trim(),
+      close_existing_chrome: elements.closeExistingChrome.checked,
+      clone_profiles_for_automation: elements.cloneProfilesForAutomation.checked,
       skip_paid_orders: elements.skipPaidOrders.checked,
       profiles,
     },
@@ -2359,4 +2377,3 @@ loadData().catch((error) => {
   elements.metadata.textContent = error.message;
   showToast(error.message);
 });
-

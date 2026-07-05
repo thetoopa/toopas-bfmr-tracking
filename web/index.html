@@ -421,9 +421,25 @@
                 BFMR Chrome Profile
                 <select id="bfmrProfileDirectory"></select>
               </label>
+              <label class="settings-wide">
+                Chrome User Data Folder
+                <input id="chromeUserDataDir" type="text" spellcheck="false" />
+              </label>
+              <label class="settings-wide">
+                Chrome Executable
+                <input id="chromeExe" type="text" spellcheck="false" />
+              </label>
               <label class="checkbox-row">
                 <input id="skipPaidOrders" type="checkbox" />
                 Skip paid orders unless ETA needs refresh
+              </label>
+              <label class="checkbox-row">
+                <input id="closeExistingChrome" type="checkbox" />
+                Close Chrome before sync
+              </label>
+              <label class="checkbox-row">
+                <input id="cloneProfilesForAutomation" type="checkbox" />
+                Clone profile before sync
               </label>
             </div>
             <div id="settingsProfiles" class="settings-profiles"></div>

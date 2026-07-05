@@ -31,6 +31,8 @@ Open `http://127.0.0.1:8765/`.
 
 Use the Settings tab to choose Chrome profiles from the detected local Chrome profile list. Each Amazon profile can be named, enabled, and marked as `Personal` or `Business`.
 
+Chrome paths are auto-detected on macOS, Windows, and Linux. If a machine uses a nonstandard Chrome install or profile folder, set `Chrome User Data Folder` and `Chrome Executable` in Settings. Enable `Close Chrome before sync` when scraping from the same signed-in Chrome profile you normally browse with. Keep `Clone profile before sync` enabled for normal signed-in Chrome profiles; the temporary profile copy is stored under ignored local data.
+
 The assumptions in Settings control default cashback, no-order fallback account/cashback, business default cashback, and manual assumed orders.
 
 The header has a light/dark mode toggle. The preference is saved in your browser.

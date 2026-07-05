@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
+import platform
 import re
+import shutil
 import subprocess
+import time
 from datetime import datetime
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -38,12 +42,48 @@ AMAZON_ORDERS_PATH = ROOT / "data" / "amazon_orders.json"
 SETTINGS_PATH = ROOT / "data" / "settings.json"
 UPLOAD_ROOT = ROOT / "uploads"
 WORKBOOK_PATH = ROOT / "outputs" / "Toopas_BFMR_Tracking.xlsx"
-NODE_EXE = Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "bin" / "node.exe"
 WORKBOOK_BUILDER = ROOT / "scripts" / "build_workbook.mjs"
 LIVE_EXTRACTOR = ROOT / "scripts" / "live_extract.mjs"
-AUTOMATION_USER_DATA_DIR = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "BFMR_Automation_User_Data"
 CHROME_CDP_PORT = "9222"
-CHROME_USER_DATA_DIR = Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
+
+
+def default_node_executable() -> Path:
+    executable = "node.exe" if platform.system() == "Windows" else "node"
+    bundled = Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "bin" / executable
+    if bundled.exists():
+        return bundled
+    found = shutil.which("node")
+    return Path(found) if found else bundled
+
+
+def default_chrome_user_data_dir() -> Path:
+    override = os.environ.get("CHROME_USER_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+    if system == "Windows":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Google" / "Chrome" / "User Data"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "google-chrome"
+
+
+def default_chrome_executable() -> Path | str:
+    override = os.environ.get("CHROME_EXE")
+    if override:
+        return Path(override).expanduser()
+    system = platform.system()
+    if system == "Darwin":
+        return Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if system == "Windows":
+        return Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe"
+    return shutil.which("google-chrome") or shutil.which("chromium-browser") or shutil.which("chromium") or "google-chrome"
+
+
+NODE_EXE = default_node_executable()
+CHROME_USER_DATA_DIR = default_chrome_user_data_dir()
+CHROME_EXE = default_chrome_executable()
+CHROME_AUTOMATION_USER_DATA_DIR = ROOT / "data" / "chrome_automation_profiles"
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("application/javascript; charset=utf-8", ".js")
@@ -134,6 +174,14 @@ def normalize_settings_payload(payload: dict | None) -> dict:
     chrome = settings.setdefault("chrome", {})
     chrome["bfmr_profile_directory"] = str(chrome.get("bfmr_profile_directory") or "Default").strip() or "Default"
     chrome["skip_paid_orders"] = bool(chrome.get("skip_paid_orders", True))
+    chrome["user_data_dir"] = str(chrome.get("user_data_dir") or CHROME_USER_DATA_DIR).strip() or str(CHROME_USER_DATA_DIR)
+    chrome["chrome_exe"] = str(chrome.get("chrome_exe") or CHROME_EXE).strip() or str(CHROME_EXE)
+    chrome["close_existing_chrome"] = bool(chrome.get("close_existing_chrome", False))
+    chrome["clone_profiles_for_automation"] = bool(chrome.get("clone_profiles_for_automation", True))
+    chrome["automation_user_data_dir"] = (
+        str(chrome.get("automation_user_data_dir") or CHROME_AUTOMATION_USER_DATA_DIR).strip()
+        or str(CHROME_AUTOMATION_USER_DATA_DIR)
+    )
     profiles = []
     for index, profile in enumerate(chrome.get("profiles", [])):
         if not isinstance(profile, dict):
@@ -158,6 +206,19 @@ def normalize_settings_payload(payload: dict | None) -> dict:
     return settings
 
 
+def configured_chrome_user_data_dir() -> Path:
+    if not SETTINGS_PATH.exists():
+        return CHROME_USER_DATA_DIR
+    try:
+        payload = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return CHROME_USER_DATA_DIR
+    value = payload.get("chrome", {}).get("user_data_dir") if isinstance(payload, dict) else None
+    if not value:
+        return CHROME_USER_DATA_DIR
+    return Path(str(value)).expanduser()
+
+
 def load_settings() -> dict:
     if not SETTINGS_PATH.exists():
         save_settings(DEFAULT_SETTINGS)
@@ -177,7 +238,8 @@ def save_settings(settings: dict) -> dict:
 
 def load_chrome_profiles() -> list[dict]:
     profiles: dict[str, dict] = {}
-    local_state = CHROME_USER_DATA_DIR / "Local State"
+    chrome_user_data_dir = configured_chrome_user_data_dir()
+    local_state = chrome_user_data_dir / "Local State"
     if local_state.exists():
         try:
             payload = json.loads(local_state.read_text(encoding="utf-8"))
@@ -193,13 +255,13 @@ def load_chrome_profiles() -> list[dict]:
                         "name": name,
                         "user_name": user_name,
                         "label": f"{name} ({directory})" + (f" - {user_name}" if user_name else ""),
-                        "path": str(CHROME_USER_DATA_DIR / directory),
+                        "path": str(chrome_user_data_dir / directory),
                     }
         except (OSError, json.JSONDecodeError):
             pass
 
-    if CHROME_USER_DATA_DIR.exists():
-        for child in CHROME_USER_DATA_DIR.iterdir():
+    if chrome_user_data_dir.exists():
+        for child in chrome_user_data_dir.iterdir():
             if not child.is_dir():
                 continue
             if child.name != "Default" and not re.fullmatch(r"Profile \d+", child.name):
@@ -315,13 +377,17 @@ def rebuild_workbook() -> None:
     result = subprocess.run(
         [str(NODE_EXE), str(WORKBOOK_BUILDER)],
         cwd=ROOT,
+        env=workbook_env(),
         capture_output=True,
         text=True,
         timeout=120,
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "Workbook rebuild failed.")
+        message = result.stderr.strip() or result.stdout.strip() or "Workbook rebuild failed."
+        if optional_workbook_tool_missing(message):
+            return
+        raise RuntimeError(message)
 
 
 def refresh_enriched_dataset() -> None:
@@ -330,45 +396,113 @@ def refresh_enriched_dataset() -> None:
     save_dataset(enriched, DATA_PATH)
 
 
-def stop_automation_chrome() -> None:
-    subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            (
-                "Get-CimInstance Win32_Process | "
-                "Where-Object { $_.Name -like 'chrome*' -and $_.CommandLine -like '*remote-debugging-port=9222*' } | "
-                "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
-            ),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+def workbook_env() -> dict[str, str]:
+    env = os.environ.copy()
+    bundled_node_modules = (
+        Path.home()
+        / ".cache"
+        / "codex-runtimes"
+        / "codex-primary-runtime"
+        / "dependencies"
+        / "node"
+        / "node_modules"
     )
-    for _ in range(20):
-        result = subprocess.run(
+    if bundled_node_modules.exists():
+        env.setdefault("ARTIFACT_TOOL_NODE_MODULES", str(bundled_node_modules))
+    return env
+
+
+def optional_workbook_tool_missing(message: str) -> bool:
+    return "@oai/artifact-tool" in message and (
+        "ERR_MODULE_NOT_FOUND" in message
+        or "Cannot find package" in message
+        or "Cannot find module" in message
+    )
+
+
+def close_existing_chrome() -> None:
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.run(
+            ["osascript", "-e", 'tell application "Google Chrome" to if it is running then quit'],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        for _ in range(20):
+            result = subprocess.run(["pgrep", "-x", "Google Chrome"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return
+            time.sleep(0.5)
+        return
+    if system == "Windows":
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        return
+    for executable in ("google-chrome", "chrome", "chromium", "chromium-browser"):
+        if shutil.which("pkill"):
+            subprocess.run(["pkill", "-x", executable], capture_output=True, text=True, check=False)
+
+
+def stop_automation_chrome() -> None:
+    if platform.system() == "Windows":
+        subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
                 "-Command",
                 (
                     "Get-CimInstance Win32_Process | "
-                    "Where-Object { $_.Name -like 'chrome*' -and $_.CommandLine -like '*remote-debugging-port=9222*' } | "
-                    "Measure-Object | Select-Object -ExpandProperty Count"
+                    f"Where-Object {{ $_.Name -like 'chrome*' -and $_.CommandLine -like '*remote-debugging-port={CHROME_CDP_PORT}*' }} | "
+                    "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
                 ),
             ],
             cwd=ROOT,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
             check=False,
         )
-        if result.stdout.strip() in {"", "0"}:
+        for _ in range(20):
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        "Get-CimInstance Win32_Process | "
+                        f"Where-Object {{ $_.Name -like 'chrome*' -and $_.CommandLine -like '*remote-debugging-port={CHROME_CDP_PORT}*' }} | "
+                        "Measure-Object | Select-Object -ExpandProperty Count"
+                    ),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.stdout.strip() in {"", "0"}:
+                return
+            time.sleep(0.5)
+        return
+
+    if not shutil.which("pkill") or not shutil.which("pgrep"):
+        return
+    port_pattern = f"[r]emote-debugging-port={CHROME_CDP_PORT}"
+    subprocess.run(["pkill", "-f", port_pattern], cwd=ROOT, capture_output=True, text=True, timeout=30, check=False)
+    for _ in range(20):
+        result = subprocess.run(["pgrep", "-f", port_pattern], cwd=ROOT, capture_output=True, text=True, timeout=10, check=False)
+        if result.returncode != 0 or not result.stdout.strip():
             return
-        subprocess.run(["powershell", "-NoProfile", "-Command", "Start-Sleep -Milliseconds 500"], check=False)
+        time.sleep(0.5)
 
 
 def run_live_extract(
@@ -379,6 +513,10 @@ def run_live_extract(
     skip_paid: bool = True,
     refresh_all: bool = False,
     manual_orders: list[str] | None = None,
+    user_data_dir: str | Path | None = None,
+    chrome_exe: str | Path | None = None,
+    source_user_data_dir: str | Path | None = None,
+    clone_profile: bool = False,
 ) -> dict:
     if not NODE_EXE.exists() or not LIVE_EXTRACTOR.exists():
         raise RuntimeError("Live extractor runtime is missing.")
@@ -388,8 +526,12 @@ def run_live_extract(
         f"--stage={stage}",
         f"--profile={profile}",
         f"--port={CHROME_CDP_PORT}",
-        f"--user-data-dir={AUTOMATION_USER_DATA_DIR}",
+        f"--user-data-dir={user_data_dir or CHROME_USER_DATA_DIR}",
+        f"--chrome-exe={chrome_exe or CHROME_EXE}",
     ]
+    if clone_profile:
+        args.append("--clone-profile=true")
+        args.append(f"--source-user-data-dir={source_user_data_dir or CHROME_USER_DATA_DIR}")
     if account:
         args.append(f"--account={account}")
         args.append(f"--skip-paid={'true' if skip_paid else 'false'}")
@@ -425,14 +567,31 @@ def run_live_extract(
 def rescrape_needed(skip_paid_orders: bool | None = None, refresh_all: bool = False) -> dict:
     settings = load_settings()
     chrome = settings.get("chrome", {})
+    chrome_user_data_dir = chrome.get("user_data_dir") or str(CHROME_USER_DATA_DIR)
+    clone_profiles = bool(chrome.get("clone_profiles_for_automation", True))
+    automation_user_data_dir = chrome.get("automation_user_data_dir") or str(CHROME_AUTOMATION_USER_DATA_DIR)
+    launch_user_data_dir = automation_user_data_dir if clone_profiles else chrome_user_data_dir
+    chrome_exe = chrome.get("chrome_exe") or str(CHROME_EXE)
     assumptions = settings.get("assumptions", {})
     manual_orders = [
         normalize_order_number(row.get("order_number"))
         for row in assumptions.get("manual_assumed_orders", [])
         if isinstance(row, dict) and normalize_order_number(row.get("order_number"))
     ]
+    if chrome.get("close_existing_chrome"):
+        close_existing_chrome()
     stop_automation_chrome()
-    steps = [run_live_extract("bfmr", chrome.get("bfmr_profile_directory") or "Default", manual_orders=manual_orders)]
+    steps = [
+        run_live_extract(
+            "bfmr",
+            chrome.get("bfmr_profile_directory") or "Default",
+            manual_orders=manual_orders,
+            user_data_dir=launch_user_data_dir,
+            chrome_exe=chrome_exe,
+            source_user_data_dir=chrome_user_data_dir,
+            clone_profile=clone_profiles,
+        )
+    ]
     profiles = [profile for profile in chrome.get("profiles", []) if profile.get("enabled", True)]
     for index, profile in enumerate(profiles):
         stop_automation_chrome()
@@ -445,6 +604,10 @@ def rescrape_needed(skip_paid_orders: bool | None = None, refresh_all: bool = Fa
                 skip_paid=bool(chrome.get("skip_paid_orders", True)) if skip_paid_orders is None else skip_paid_orders,
                 refresh_all=refresh_all,
                 manual_orders=manual_orders,
+                user_data_dir=launch_user_data_dir,
+                chrome_exe=chrome_exe,
+                source_user_data_dir=chrome_user_data_dir,
+                clone_profile=clone_profiles,
             )
         )
     refresh_enriched_dataset()

@@ -1,12 +1,13 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 
 const ROOT = path.resolve(".");
 const OUT_DIR = path.join(ROOT, "data", "live_extract");
-const DEFAULT_USER_DATA_DIR = path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "User Data");
-const CHROME_EXE = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const DEFAULT_USER_DATA_DIR = defaultChromeUserDataDir();
+const DEFAULT_CHROME_EXE = defaultChromeExecutable();
 const BFMR_URL = "https://www.bfmr.com/tracker/all";
 const AMAZON_URL = "https://www.amazon.com/gp/css/order-history?ref_=nav_orders_first";
 const ORDER_RE = /\b\d{3}-\d{7}-\d{7}\b/;
@@ -29,6 +30,107 @@ function argValue(name, fallback = "") {
   return found ? found.slice(prefix.length) : fallback;
 }
 
+function defaultChromeUserDataDir() {
+  if (process.env.CHROME_USER_DATA_DIR) return process.env.CHROME_USER_DATA_DIR;
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome");
+  }
+  if (process.platform === "win32") {
+    const base = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    return path.join(base, "Google", "Chrome", "User Data");
+  }
+  if (process.env.XDG_CONFIG_HOME) {
+    return path.join(process.env.XDG_CONFIG_HOME, "google-chrome");
+  }
+  return path.join(os.homedir(), ".config", "google-chrome");
+}
+
+function defaultChromeExecutable() {
+  if (process.env.CHROME_EXE) return process.env.CHROME_EXE;
+  if (process.platform === "darwin") {
+    return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  }
+  if (process.platform === "win32") {
+    return path.join(process.env.PROGRAMFILES || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
+  }
+  return "google-chrome";
+}
+
+function normalizeProfileDirectory(value) {
+  const profile = String(value || "Default").trim() || "Default";
+  return /^Profile\d+$/i.test(profile) ? profile.replace(/^Profile/i, "Profile ") : profile;
+}
+
+function argBoolean(name, fallback = false) {
+  const value = argValue(name, fallback ? "true" : "false").toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
+function shouldSkipProfileCopy(relativePath, isDirectory) {
+  const normalized = relativePath.split(path.sep).join("/").toLowerCase();
+  const base = path.basename(relativePath).toLowerCase();
+  if (!normalized) return false;
+  if (base.startsWith("singleton")) return true;
+  if (["lockfile", "lock"].includes(base)) return true;
+  if (!isDirectory) return base.endsWith(".tmp") || base.endsWith(".temp");
+  return [
+    "cache",
+    "code cache",
+    "crashpad",
+    "dawncache",
+    "gpucache",
+    "grshadercache",
+    "optimization guide prediction models",
+    "pnacltranslationcache",
+    "safe browsing",
+    "shadercache",
+    "component_crx_cache",
+  ].includes(base) || normalized.includes("/cache/") || normalized.endsWith("/cache");
+}
+
+function copyProfileEntry(source, target, root) {
+  const stats = fs.lstatSync(source, { throwIfNoEntry: false });
+  if (!stats) return;
+  const relativePath = path.relative(root, source);
+  if (shouldSkipProfileCopy(relativePath, stats.isDirectory())) return;
+  if (stats.isSymbolicLink()) return;
+  if (stats.isDirectory()) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const entry of fs.readdirSync(source)) {
+      copyProfileEntry(path.join(source, entry), path.join(target, entry), root);
+    }
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try {
+    fs.copyFileSync(source, target);
+  } catch (error) {
+    log("Skipped Chrome profile file during copy", { file: relativePath, error: error.message });
+  }
+}
+
+function prepareUserDataDir(profileDirectory, requestedUserDataDir) {
+  if (!argBoolean("clone-profile", false)) return requestedUserDataDir;
+
+  const sourceUserDataDir = argValue("source-user-data-dir", DEFAULT_USER_DATA_DIR);
+  const sourceProfileDir = path.join(sourceUserDataDir, profileDirectory);
+  const targetUserDataDir = requestedUserDataDir;
+  const targetProfileDir = path.join(targetUserDataDir, profileDirectory);
+  if (!fs.existsSync(sourceProfileDir)) {
+    throw new Error(`Chrome profile was not found: ${sourceProfileDir}`);
+  }
+
+  fs.rmSync(targetUserDataDir, { recursive: true, force: true });
+  fs.mkdirSync(targetUserDataDir, { recursive: true });
+  const localStatePath = path.join(sourceUserDataDir, "Local State");
+  if (fs.existsSync(localStatePath)) {
+    fs.copyFileSync(localStatePath, path.join(targetUserDataDir, "Local State"));
+  }
+  copyProfileEntry(sourceProfileDir, targetProfileDir, sourceProfileDir);
+  log("Cloned Chrome profile for automation", { profileDirectory, sourceUserDataDir, targetUserDataDir });
+  return targetUserDataDir;
+}
+
 function log(message, details = undefined) {
   const line = details === undefined ? message : `${message} ${JSON.stringify(details)}`;
   console.log(`[${new Date().toISOString()}] ${line}`);
@@ -37,6 +139,7 @@ function log(message, details = undefined) {
 async function launchProfile(profileDirectory) {
   const port = Number(argValue("port", "9222"));
   const userDataDir = argValue("user-data-dir", DEFAULT_USER_DATA_DIR);
+  const chromeExe = argValue("chrome-exe", DEFAULT_CHROME_EXE);
   const endpoint = `http://127.0.0.1:${port}`;
   if (["1", "true", "yes"].includes(argValue("reuse-existing", "").toLowerCase())) {
     try {
@@ -63,10 +166,11 @@ async function launchProfile(profileDirectory) {
     throw new Error(`Chrome debugging port ${port} is already in use. Stop that Chrome instance or pass --reuse-existing=true.`);
   }
 
-  log("Launching visible Chrome profile with CDP", { profileDirectory, port, userDataDir });
-  spawn(CHROME_EXE, [
+  log("Launching visible Chrome profile with CDP", { profileDirectory, port, userDataDir, chromeExe });
+  const launchUserDataDir = prepareUserDataDir(profileDirectory, userDataDir);
+  spawn(chromeExe, [
     `--remote-debugging-port=${port}`,
-    `--user-data-dir=${userDataDir}`,
+    `--user-data-dir=${launchUserDataDir}`,
     `--profile-directory=${profileDirectory}`,
     "--no-first-run",
     "--start-maximized",
@@ -583,8 +687,7 @@ async function extractAmazon(profileDirectory, accountLabel) {
 
 async function main() {
   const stage = argValue("stage", "bfmr");
-  const rawProfile = argValue("profile", "Default");
-  const profile = rawProfile === "Profile9" ? "Profile 9" : rawProfile;
+  const profile = normalizeProfileDirectory(argValue("profile", "Default"));
   if (stage === "bfmr") {
     await extractBfmr(profile);
     return;

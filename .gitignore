@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
 node_modules/
+.venv/
 
 data/*.json
+data/chrome_automation_profiles/
 data/live_extract/
 logs/
 uploads/
