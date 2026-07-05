@@ -14,6 +14,7 @@ This project is a local-first BFMR/Amazon tracking dashboard. Keep it useful for
 - Keep cancelled BFMR rows hidden by default from normal views.
 - Keep the BFMR-style table as the main view.
 - Keep PWA/mobile support working.
+- Keep `docs/` integration contracts current when API fields, accounting rules, scrape behavior, or reconciliation-relevant logic changes.
 - When useful improvements are made, remind the user to commit and push them to GitHub so the community version stays current.
 
 ## Development Checks

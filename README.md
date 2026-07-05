@@ -55,6 +55,8 @@ Read `AGENTS.md` before using Codex or another coding agent on this project. It 
 
 See `CONTRIBUTING.md` before pushing changes. The short version: keep private data out of git, run checks, and push useful improvements back to GitHub so the shared tracker keeps getting better.
 
+Integration documentation for linking this tracker to a larger financial system lives in `docs/`.
+
 Run checks:
 
 ```powershell
