@@ -7,6 +7,7 @@ Use these documents when connecting Toopa's BFMR Tracking to another financial i
 - `FINANCIAL_SYSTEM_INTEGRATION.md`: high-level architecture and recommended Windows-to-Mac integration pattern.
 - `API_AND_DATA_CONTRACT.md`: API endpoints and field-level data contract for `/api/data`.
 - `RECONCILIATION_PLAYBOOK.md`: rules for matching BFMR/Amazon expected values against actual bank, card, cashback, and bonus data.
+- `BANK_AND_CARD_RECONCILIATION_REQUIREMENTS.md`: detailed requirements for Chase Prime Visa, Chase checking, pending profit, unmatched purchases, points/cashback, and return refunds.
 
 ## Main Integration Rule
 

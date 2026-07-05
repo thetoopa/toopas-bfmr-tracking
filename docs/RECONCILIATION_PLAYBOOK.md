@@ -2,6 +2,8 @@
 
 This playbook describes how the Mac Mini financial system should use BFMR tracker data to confirm expected purchases, payouts, cashback, and exceptions.
 
+For implementation-level requirements covering Chase Prime Visa charges/rewards, Chase checking deposits, pending profit, unmatched card purchases, BFMR-only purchases, and return refund detection, read `BANK_AND_CARD_RECONCILIATION_REQUIREMENTS.md` alongside this playbook.
+
 ## Principle
 
 Treat Toopa's BFMR Tracking as expected operational truth and the financial intake system as actual financial truth.
