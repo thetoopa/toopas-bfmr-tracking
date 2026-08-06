@@ -18,5 +18,13 @@
         "enabled": true
       }
     ]
+  },
+  "credit": {
+    "limit": 0,
+    "current_balance": 0,
+    "balance_as_of": "",
+    "charge_lead_days": 1,
+    "warning_utilization": 0.8,
+    "planned_payments": []
   }
 }

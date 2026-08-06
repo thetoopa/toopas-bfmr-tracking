@@ -57,6 +57,8 @@ See `CONTRIBUTING.md` before pushing changes. The short version: keep private da
 
 Integration documentation for linking this tracker to a larger financial system lives in `docs/`.
 
+The Credit tab forecasts daily utilization from Amazon ETAs, BFMR reservations, the current posted-plus-pending card balance, and planned payments. See `docs/CREDIT_CAPACITY_PLANNER.md` for its accounting assumptions.
+
 Run checks:
 
 ```powershell

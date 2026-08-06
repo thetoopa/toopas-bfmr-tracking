@@ -8,6 +8,7 @@ This project is a local-first BFMR/Amazon tracking dashboard. Keep it useful for
 - Keep the app runnable locally with no private seed files. A fresh clone should start and allow imports.
 - Keep Chrome profiles configurable through the Settings tab. Do not hard-code one person's profile names.
 - Keep cashback/account assumptions editable in Settings.
+- Keep credit limit, current balance, charge timing, warning threshold, and planned payments configurable. Do not hard-code one user's card balance or limit in public defaults.
 - Keep both scrape modes:
   - Normal update scrapes all orders not yet in paid status and updates relevant information.
   - One-time all refresh includes paid orders and all non-cancelled BFMR orders.
@@ -38,6 +39,7 @@ If the bundled Codex Node path is unavailable, use a local Node.js installation 
 - Keep wide-monitor table usability strong.
 - Keep mobile card views functional.
 - Any new setting should have a visible control in Settings and a documented default.
+- Credit forecasts must not add already-shipped/delivered orders on top of the user-entered current posted-plus-pending balance.
 
 ## Data Model Notes
 

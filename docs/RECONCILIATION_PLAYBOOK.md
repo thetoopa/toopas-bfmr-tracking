@@ -127,8 +127,13 @@ The tracker keeps raw BFMR rows visible, but return accounting decides what coun
 - `accounting_reason == "Superseded by accepted split row in return group"`: raw BFMR history row only.
 - `accounting_reason == "Accepted split row in return group"`: count the row normally.
 - `accounting_reason == "Scaled to BFMR paid quantity in partial return group"`: count the scaled quantity, purchase, payout, and profit.
+- `accounting_reason == "Consolidated paid quantity from same-tracking BFMR split row"`: count the consolidated paid row; its zero-payout companion is excluded.
+- `amazon_purchase_reconciliation == "allocated_down_to_amazon_total"`: BFMR repeated an order-level retail amount, so use the allocated `accounting_purchase_total` values.
+- `amazon_purchase_reconciliation == "amazon_total_exceeds_bfmr_counted_rows"`: do not add the gap to product profit automatically. Match `amazon_purchase_gap` to a card refund or create an exception for a rejected, returned, or missing BFMR item.
 
 Rows with `split_review_needed == true` should become reconciliation exceptions, not silent matches.
+
+For card cash-flow reconciliation, preserve both sides: Amazon order total is the original charge expectation, while BFMR `accounting_purchase_total` is the product cost currently counted against accepted BFMR units. A positive Amazon purchase gap remains financially open until Chase shows the corresponding refund or a manual review explains it.
 
 ## Exception Rules
 

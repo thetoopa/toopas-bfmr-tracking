@@ -17,7 +17,7 @@
     <script>
       document.documentElement.dataset.theme = localStorage.getItem("toopa-theme") || "light";
     </script>
-    <link rel="stylesheet" href="/styles.css?v=20260626-19" />
+    <link rel="stylesheet" href="/styles.css?v=20260806-2" />
   </head>
   <body>
     <header class="app-header">
@@ -28,7 +28,7 @@
         <div>
           <h1>Toopa's BFMR Tracking</h1>
           <p id="metadata" class="metadata">Loading data...</p>
-          <p class="build-marker">Build 20260626-21 | Corrected return totals</p>
+          <p class="build-marker">Build 20260806-2 | Credit capacity planner</p>
         </div>
       </div>
       <div class="header-actions">
@@ -41,6 +41,7 @@
     <main>
       <nav class="section-nav app-tabs" aria-label="Dashboard tabs">
         <button class="tab-button active" type="button" data-tab="dashboard">Dashboard</button>
+        <button class="tab-button" type="button" data-tab="credit">Credit</button>
         <button class="tab-button" type="button" data-tab="orders">Orders</button>
         <button class="tab-button" type="button" data-tab="analytics">Analytics</button>
         <button class="tab-button" type="button" data-tab="money">Money</button>
@@ -220,6 +221,110 @@
       <section id="kpiGrid" class="kpi-grid tab-panel active" data-tab-panel="dashboard" aria-label="Totals"></section>
       <section id="lifecycleGrid" class="lifecycle-grid tab-panel active" data-tab-panel="dashboard" aria-label="Order lifecycle"></section>
       <section id="insightGrid" class="insight-grid tab-panel active" data-tab-panel="dashboard" aria-label="Insights"></section>
+
+      <section class="credit-toolbar tab-panel" data-tab-panel="credit" aria-label="Credit inputs">
+        <div class="panel-heading">
+          <h2>Card Capacity</h2>
+          <span id="creditUpdatedStatus">Enter the card balance that already includes posted and pending charges.</span>
+        </div>
+        <form id="creditSettingsForm" class="credit-settings-form">
+          <label>
+            Credit Limit
+            <input id="creditLimit" type="number" min="0" step="0.01" inputmode="decimal" />
+          </label>
+          <label>
+            Current Posted + Pending
+            <input id="creditCurrentBalance" type="number" min="0" step="0.01" inputmode="decimal" />
+          </label>
+          <label>
+            Balance As Of
+            <input id="creditBalanceAsOf" type="date" />
+          </label>
+          <label>
+            Charge Before ETA
+            <input id="creditChargeLeadDays" type="number" min="0" max="14" step="1" inputmode="numeric" />
+          </label>
+          <label>
+            Warning At %
+            <input id="creditWarningUtilization" type="number" min="0" max="100" step="1" inputmode="decimal" />
+          </label>
+          <button id="saveCreditSettingsButton" type="submit">Save Card Snapshot</button>
+        </form>
+      </section>
+
+      <section id="creditAlert" class="credit-alert tab-panel" data-tab-panel="credit" aria-live="polite"></section>
+      <section id="creditKpiGrid" class="kpi-grid tab-panel" data-tab-panel="credit" aria-label="Credit totals"></section>
+
+      <section class="credit-grid tab-panel" data-tab-panel="credit" aria-label="Credit forecast">
+        <article class="panel credit-projection-panel">
+          <div class="panel-heading">
+            <h2>Projected Card Balance</h2>
+            <span id="creditProjectionCount"></span>
+          </div>
+          <div class="credit-table-scroll">
+            <table class="credit-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th class="num">Expected Charges</th>
+                  <th class="num">Planned Payments</th>
+                  <th class="num">Projected Balance</th>
+                  <th class="num">Available Credit</th>
+                  <th class="num">Utilization</th>
+                </tr>
+              </thead>
+              <tbody id="creditProjectionBody"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Planned Card Payments</h2>
+            <span id="plannedPaymentTotal"></span>
+          </div>
+          <form id="plannedPaymentForm" class="payment-form">
+            <label>
+              Date
+              <input id="plannedPaymentDate" name="date" type="date" required />
+            </label>
+            <label>
+              Amount
+              <input id="plannedPaymentAmount" name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" required />
+            </label>
+            <label class="payment-note">
+              Note
+              <input id="plannedPaymentNote" name="note" type="text" placeholder="Optional" />
+            </label>
+            <button type="submit">Add Payment</button>
+          </form>
+          <div id="plannedPaymentList" class="compact-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Arrival Calendar</h2>
+            <span id="creditArrivalCount"></span>
+          </div>
+          <div id="creditArrivalList" class="compact-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Unscheduled Commitments</h2>
+            <span id="creditUnscheduledTotal"></span>
+          </div>
+          <div id="creditUnscheduledList" class="compact-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>Account Exposure</h2>
+            <span id="creditCardLabel"></span>
+          </div>
+          <div id="creditAccountList" class="compact-list"></div>
+        </article>
+      </section>
 
       <section id="analyticsFilters" class="analytics-filters tab-panel" data-tab-panel="analytics" aria-label="Analytics filters">
         <label>
@@ -432,12 +537,26 @@
               <button id="saveSettingsButton" type="button">Save Settings</button>
             </div>
           </article>
+          <article class="settings-card">
+            <h3>Credit Capacity</h3>
+            <div class="settings-form">
+              <div class="settings-stat">
+                <span>Credit limit</span>
+                <strong id="settingsCreditLimitValue">Not set</strong>
+              </div>
+              <div class="settings-stat">
+                <span>Balance snapshot</span>
+                <strong id="settingsCreditBalanceValue">Not set</strong>
+              </div>
+              <button id="openCreditSettingsButton" class="secondary-button settings-wide" type="button">Open Credit Planner</button>
+            </div>
+          </article>
         </div>
       </section>
 
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=20260626-21"></script>
+    <script src="/app.js?v=20260806-2"></script>
   </body>
 </html>

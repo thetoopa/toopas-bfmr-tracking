@@ -31,14 +31,7 @@ const DEFAULT_SETTINGS = {
     default_cashback_rate: DEFAULT_CASHBACK_RATE,
     no_order_account: "Personal",
     no_order_cashback_rate: DEFAULT_CASHBACK_RATE,
-    manual_assumed_orders: [
-      {
-        order_number: "111-1403104-8336261",
-        account: "Personal",
-        cashback_rate: DEFAULT_CASHBACK_RATE,
-        note: "Manual 6% assumption per user",
-      },
-    ],
+    manual_assumed_orders: [],
   },
 };
 let settings = DEFAULT_SETTINGS;

@@ -155,6 +155,34 @@ def normalize_settings_payload(payload: dict | None) -> dict:
             }
         )
     chrome["profiles"] = profiles
+
+    credit = settings.setdefault("credit", {})
+    credit_limit = parse_number(credit.get("limit"))
+    current_balance = parse_number(credit.get("current_balance"))
+    charge_lead_days = parse_number(credit.get("charge_lead_days"))
+    warning_utilization = parse_number(credit.get("warning_utilization"))
+    credit["limit"] = round(max(float(credit_limit or 0), 0), 2)
+    credit["current_balance"] = round(max(float(current_balance or 0), 0), 2)
+    credit["balance_as_of"] = parse_date(credit.get("balance_as_of")) or ""
+    credit["charge_lead_days"] = min(max(int(charge_lead_days if charge_lead_days is not None else 1), 0), 14)
+    credit["warning_utilization"] = min(max(float(warning_utilization if warning_utilization is not None else 0.8), 0), 1)
+    planned_payments = []
+    for index, row in enumerate(credit.get("planned_payments", [])):
+        if not isinstance(row, dict):
+            continue
+        payment_date = parse_date(row.get("date"))
+        amount = parse_number(row.get("amount"))
+        if not payment_date or amount is None or amount <= 0:
+            continue
+        planned_payments.append(
+            {
+                "id": str(row.get("id") or f"payment-{index + 1}").strip(),
+                "date": payment_date,
+                "amount": round(float(amount), 2),
+                "note": str(row.get("note") or "").strip(),
+            }
+        )
+    credit["planned_payments"] = planned_payments
     return settings
 
 
@@ -404,7 +432,7 @@ def run_live_extract(
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=900,
+        timeout=3600,
         check=False,
     )
     log_dir = ROOT / "data" / "live_extract"
@@ -724,22 +752,20 @@ class BfmrHandler(SimpleHTTPRequestHandler):
             return
 
         if parsed.path == "/api/amazon-sync":
+            configured_profiles = [
+                {
+                    "account": str(profile.get("account_type") or "personal").title(),
+                    "profile": str(profile.get("profile_directory") or "Default"),
+                    "url": "https://www.amazon.com/gp/css/order-history?ref_=nav_orders_first",
+                }
+                for profile in load_settings().get("chrome", {}).get("profiles", [])
+                if profile.get("enabled", True)
+            ]
             self.send_json(
                 {
                     "ok": False,
                     "needs_chrome_extension": True,
-                    "desired_profiles": [
-                        {
-                            "account": "Personal",
-                            "profile": "cooperbheisler",
-                            "url": "https://www.amazon.com/gp/css/order-history?ref_=nav_orders_first",
-                        },
-                        {
-                            "account": "Business",
-                            "profile": "cbheisle@asu.edu",
-                            "url": "https://www.amazon.com/gp/css/order-history?ref_=nav_orders_first",
-                        },
-                    ],
+                    "desired_profiles": configured_profiles,
                     "error": "Amazon sync needs the Codex Chrome Extension enabled before I can use your Chrome profiles.",
                 },
                 409,

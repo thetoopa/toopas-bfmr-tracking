@@ -25,6 +25,8 @@ const statusColors = {
   Shipped: colors.indigo,
   Cancelled: colors.red,
   Return: "#c2410c",
+  Returned: "#c2410c",
+  Closed: colors.gray,
   Deadline: colors.amber,
   Unknown: colors.gray,
 };
@@ -73,22 +75,22 @@ const defaultSettings = {
     no_order_account: "Personal",
     no_order_cashback_rate: 0.06,
     business_default_cashback_rate: 0.06,
-    manual_assumed_orders: [
-      {
-        order_number: "111-1403104-8336261",
-        account: "Personal",
-        cashback_rate: 0.06,
-        note: "Manual 6% assumption per user",
-      },
-    ],
+    manual_assumed_orders: [],
   },
   chrome: {
     bfmr_profile_directory: "Default",
     skip_paid_orders: true,
     profiles: [
       { id: "personal-default", name: "Personal Amazon", profile_directory: "Default", account_type: "personal", enabled: true },
-      { id: "business-profile-9", name: "Business Amazon", profile_directory: "Profile9", account_type: "business", enabled: true },
     ],
+  },
+  credit: {
+    limit: 0,
+    current_balance: 0,
+    balance_as_of: "",
+    charge_lead_days: 1,
+    warning_utilization: 0.8,
+    planned_payments: [],
   },
 };
 
@@ -193,6 +195,33 @@ const elements = {
   settingsProfiles: document.getElementById("settingsProfiles"),
   addProfileButton: document.getElementById("addProfileButton"),
   saveSettingsButton: document.getElementById("saveSettingsButton"),
+  settingsCreditLimitValue: document.getElementById("settingsCreditLimitValue"),
+  settingsCreditBalanceValue: document.getElementById("settingsCreditBalanceValue"),
+  openCreditSettingsButton: document.getElementById("openCreditSettingsButton"),
+  creditSettingsForm: document.getElementById("creditSettingsForm"),
+  creditLimit: document.getElementById("creditLimit"),
+  creditCurrentBalance: document.getElementById("creditCurrentBalance"),
+  creditBalanceAsOf: document.getElementById("creditBalanceAsOf"),
+  creditChargeLeadDays: document.getElementById("creditChargeLeadDays"),
+  creditWarningUtilization: document.getElementById("creditWarningUtilization"),
+  saveCreditSettingsButton: document.getElementById("saveCreditSettingsButton"),
+  creditUpdatedStatus: document.getElementById("creditUpdatedStatus"),
+  creditAlert: document.getElementById("creditAlert"),
+  creditKpiGrid: document.getElementById("creditKpiGrid"),
+  creditProjectionCount: document.getElementById("creditProjectionCount"),
+  creditProjectionBody: document.getElementById("creditProjectionBody"),
+  plannedPaymentForm: document.getElementById("plannedPaymentForm"),
+  plannedPaymentDate: document.getElementById("plannedPaymentDate"),
+  plannedPaymentAmount: document.getElementById("plannedPaymentAmount"),
+  plannedPaymentNote: document.getElementById("plannedPaymentNote"),
+  plannedPaymentTotal: document.getElementById("plannedPaymentTotal"),
+  plannedPaymentList: document.getElementById("plannedPaymentList"),
+  creditArrivalCount: document.getElementById("creditArrivalCount"),
+  creditArrivalList: document.getElementById("creditArrivalList"),
+  creditUnscheduledTotal: document.getElementById("creditUnscheduledTotal"),
+  creditUnscheduledList: document.getElementById("creditUnscheduledList"),
+  creditCardLabel: document.getElementById("creditCardLabel"),
+  creditAccountList: document.getElementById("creditAccountList"),
 };
 
 function applyTheme(theme) {
@@ -309,6 +338,8 @@ function returnRelevant(record) {
     activeRecord(record) &&
       !String(record.item_name || "").trim().toLowerCase().includes("referral bonus") &&
       (status === "return" ||
+        status === "returned" ||
+        status === "closed" ||
         status === "deadline" ||
         record.order_number_inferred ||
         record.return_context ||
@@ -451,6 +482,11 @@ function mergeSettings(settings) {
       ...((settings || {}).chrome || {}),
       profiles: Array.isArray(settings?.chrome?.profiles) ? settings.chrome.profiles : defaultSettings.chrome.profiles,
     },
+    credit: {
+      ...defaultSettings.credit,
+      ...((settings || {}).credit || {}),
+      planned_payments: Array.isArray(settings?.credit?.planned_payments) ? settings.credit.planned_payments : [],
+    },
   };
 }
 
@@ -547,7 +583,7 @@ function filteredRecords() {
 }
 
 function summarize(records, addons = []) {
-  const active = records.filter(activeRecord);
+  const active = records.filter((record) => activeRecord(record) && !record.accounting_excluded);
   const monthly = new Map();
   const daily = new Map();
   const etaDays = new Map();
@@ -756,7 +792,7 @@ function summarize(records, addons = []) {
     precise_cashback: preciseCashbackRows,
     weighted_cashback: weightedCashback,
     cash_paid: cashPaid,
-    open_payout: payout - cashPaid,
+    open_payout: active.reduce((sum, record) => sum + openPayout(record), 0),
     open_rows: active.filter((record) => openPayout(record) > 0).length,
     missing_tracking: active.filter(trackingMissing).length,
     estimated_purchase_rows: records.filter((record) => record.purchase_is_estimate).length,
@@ -779,6 +815,316 @@ function summarize(records, addons = []) {
     previous_month: previousMonth || null,
     month_profit_delta: monthProfitDelta,
   };
+}
+
+function addIsoDays(value, days) {
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setDate(date.getDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function latestAmazonOrders() {
+  const orders = new Map();
+  for (const order of dataset?.amazon_orders || []) {
+    const orderNumber = String(order.order_number || "").trim();
+    if (!hasAmazonOrderNumber(orderNumber)) continue;
+    const existing = orders.get(orderNumber);
+    const timestamp = Date.parse(order.detail_scraped_at || order.scraped_at || "") || 0;
+    const existingTimestamp = Date.parse(existing?.detail_scraped_at || existing?.scraped_at || "") || 0;
+    if (!existing || timestamp >= existingTimestamp) orders.set(orderNumber, order);
+  }
+  return orders;
+}
+
+function cardAccountLabel(value) {
+  const account = String(value || "").trim();
+  if (account.toLowerCase() === "personal") return "Personal";
+  if (account.toLowerCase() === "business") return "Business";
+  return account || "Unknown";
+}
+
+function orderLooksCharged(rows, amazonOrder) {
+  const statuses = new Set(rows.map((record) => String(record.status || "").toLowerCase()));
+  if ([...statuses].some((status) => ["shipped", "package received", "processed", "paid", "return", "returned", "closed"].includes(status))) {
+    return true;
+  }
+  if (rows.some((record) => !trackingMissing(record))) return true;
+  const delivery = String(amazonOrder?.delivery_status || "").toLowerCase();
+  return /delivered|shipped|out for delivery/.test(delivery);
+}
+
+function creditAnalysis() {
+  const credit = mergeSettings(settingsState).credit;
+  const today = todayIso();
+  const limit = Math.max(Number(credit.limit) || 0, 0);
+  const currentBalance = Math.max(Number(credit.current_balance) || 0, 0);
+  const leadDays = Math.max(0, Math.min(14, Number(credit.charge_lead_days) || 0));
+  const warningUtilization = Math.max(0, Math.min(1, Number(credit.warning_utilization) || 0.8));
+  const amazonByOrder = latestAmazonOrders();
+  const groups = new Map();
+
+  for (const record of dataset?.records || []) {
+    if (!activeRecord(record) || !hasAmazonOrderNumber(record.order_number)) continue;
+    if (!groups.has(record.order_number)) groups.set(record.order_number, []);
+    groups.get(record.order_number).push(record);
+  }
+
+  const scheduled = [];
+  const unscheduled = [];
+  const arrivals = new Map();
+  const accounts = new Map();
+  const cardEndings = new Set();
+
+  const accountRow = (account) => {
+    const label = cardAccountLabel(account);
+    if (!accounts.has(label)) accounts.set(label, { account: label, open_spend: 0, scheduled: 0, unscheduled: 0, arrivals: 0 });
+    return accounts.get(label);
+  };
+
+  for (const [orderNumber, rows] of groups) {
+    const countedRows = rows.filter((record) => !record.accounting_excluded);
+    if (!countedRows.length) continue;
+    const amazonOrder = amazonByOrder.get(orderNumber);
+    const bfmrAmount = countedRows.reduce((sum, record) => sum + accountingPurchase(record), 0);
+    const amazonAmount = Number(amazonOrder?.order_total) || 0;
+    const amount = amazonAmount > 0 ? amazonAmount : bfmrAmount;
+    const account = cardAccountLabel(amazonOrder?.account || countedRows.find((record) => /personal|business/i.test(record.account || ""))?.account);
+    const accountTotals = accountRow(account);
+    const allPaid = countedRows.every((record) => String(record.status || "").toLowerCase() === "paid");
+    if (!allPaid) accountTotals.open_spend += bfmrAmount;
+
+    const paymentMethod = String(amazonOrder?.payment_method || countedRows[0]?.amazon_payment_method || "");
+    const cardEnding = paymentMethod.match(/ending\s+in\s+(\d{4})/i)?.[1];
+    if (cardEnding) cardEndings.add(cardEnding);
+
+    const eta = String(amazonOrder?.delivery_eta_date || countedRows.find((record) => record.amazon_delivery_eta_date)?.amazon_delivery_eta_date || "");
+    if (!allPaid && eta) {
+      const arrivalDate = eta < today ? today : eta;
+      if (!arrivals.has(arrivalDate)) arrivals.set(arrivalDate, { date: arrivalDate, orders: 0, units: 0, amount: 0, accounts: new Set(), overdue: eta < today });
+      const arrival = arrivals.get(arrivalDate);
+      arrival.orders += 1;
+      arrival.units += countedRows.reduce((sum, record) => sum + accountingQuantity(record), 0);
+      arrival.amount += amount;
+      arrival.accounts.add(account);
+      arrival.overdue = arrival.overdue || eta < today;
+      accountTotals.arrivals += amount;
+    }
+
+    if (allPaid || orderLooksCharged(countedRows, amazonOrder) || amount <= 0) continue;
+    const itemNames = [...new Set(countedRows.map((record) => record.item_name).filter(Boolean))];
+    const event = {
+      order_number: orderNumber,
+      amount,
+      account,
+      eta,
+      label: itemNames.slice(0, 2).join(" / ") || orderNumber,
+      source: amazonAmount > 0 ? "Amazon order total" : "BFMR retail total",
+    };
+    if (eta) {
+      event.date = addIsoDays(eta, -leadDays);
+      if (event.date < today) event.date = today;
+      scheduled.push(event);
+      accountTotals.scheduled += amount;
+    } else {
+      unscheduled.push({ ...event, type: "Placed order without ETA" });
+      accountTotals.unscheduled += amount;
+    }
+  }
+
+  for (const record of dataset?.records || []) {
+    if (!activeRecord(record) || record.accounting_excluded || hasAmazonOrderNumber(record.order_number)) continue;
+    const status = String(record.status || "").toLowerCase();
+    if (["shipped", "package received", "processed", "paid", "return", "returned", "closed", "deadline"].includes(status)) continue;
+    if (!trackingMissing(record)) continue;
+    const amount = accountingPurchase(record);
+    if (amount <= 0) continue;
+    const account = cardAccountLabel(record.account);
+    unscheduled.push({
+      order_number: "",
+      amount,
+      account,
+      eta: "",
+      label: record.item_name || "BFMR reservation",
+      source: record.price_source || "BFMR retail total",
+      type: status === "purchased" || status === "ordered" ? "Order number/ETA missing" : "BFMR reservation not ordered",
+    });
+    const totals = accountRow(account);
+    totals.unscheduled += amount;
+    totals.open_spend += amount;
+  }
+
+  const payments = (credit.planned_payments || [])
+    .filter((payment) => payment.date && Number(payment.amount) > 0 && payment.date >= today)
+    .map((payment) => ({ ...payment, amount: Number(payment.amount) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const events = new Map([[today, { date: today, charges: 0, payments: 0 }]]);
+  for (const event of scheduled) {
+    if (!events.has(event.date)) events.set(event.date, { date: event.date, charges: 0, payments: 0 });
+    events.get(event.date).charges += event.amount;
+  }
+  for (const payment of payments) {
+    if (!events.has(payment.date)) events.set(payment.date, { date: payment.date, charges: 0, payments: 0 });
+    events.get(payment.date).payments += payment.amount;
+  }
+
+  let balance = currentBalance;
+  let peakBalance = currentBalance;
+  const projection = [...events.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((event) => {
+      balance = Math.max(balance + event.charges - event.payments, 0);
+      peakBalance = Math.max(peakBalance, balance);
+      return {
+        ...event,
+        balance,
+        available: limit ? limit - balance : null,
+        utilization: limit ? balance / limit : null,
+      };
+    });
+
+  const scheduledTotal = scheduled.reduce((sum, event) => sum + event.amount, 0);
+  const unscheduledTotal = unscheduled.reduce((sum, event) => sum + event.amount, 0);
+  const plannedPaymentTotal = payments.reduce((sum, payment) => sum + payment.amount, 0);
+  const worstCaseBalance = peakBalance + unscheduledTotal;
+  const minHeadroom = limit ? limit - worstCaseBalance : null;
+  return {
+    limit,
+    current_balance: currentBalance,
+    balance_as_of: credit.balance_as_of || "",
+    warning_utilization: warningUtilization,
+    scheduled,
+    scheduled_total: scheduledTotal,
+    unscheduled: unscheduled.sort((a, b) => b.amount - a.amount),
+    unscheduled_total: unscheduledTotal,
+    payments,
+    planned_payment_total: plannedPaymentTotal,
+    projection,
+    peak_balance: peakBalance,
+    worst_case_balance: worstCaseBalance,
+    min_headroom: minHeadroom,
+    arrivals: [...arrivals.values()]
+      .map((row) => ({ ...row, accounts: [...row.accounts].sort() }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    accounts: [...accounts.values()].sort((a, b) => b.open_spend - a.open_spend),
+    card_label: cardEndings.size ? `Amazon Visa ending ${[...cardEndings].join(", ")}` : "Payment card not identified",
+  };
+}
+
+function renderCreditPlanner() {
+  if (!elements.creditKpiGrid) return;
+  const analysis = creditAnalysis();
+  const hasSnapshot = Boolean(analysis.balance_as_of);
+  const utilization = analysis.limit ? analysis.current_balance / analysis.limit : 0;
+  const peakUtilization = analysis.limit ? analysis.peak_balance / analysis.limit : 0;
+  const worstUtilization = analysis.limit ? analysis.worst_case_balance / analysis.limit : 0;
+  const nextArrival = analysis.arrivals[0];
+  elements.creditKpiGrid.innerHTML = [
+    kpi("Current Card Balance", money(analysis.current_balance), hasSnapshot ? `As of ${fmtDate(analysis.balance_as_of)}` : "Snapshot date needed"),
+    kpi("Available Now", analysis.limit ? money(analysis.limit - analysis.current_balance) : "Set limit", analysis.limit ? percent.format(utilization) + " utilized" : ""),
+    kpi("Scheduled Charges", money(analysis.scheduled_total), `${analysis.scheduled.length} placed orders with ETA`),
+    kpi("Unscheduled", money(analysis.unscheduled_total), `${analysis.unscheduled.length} reservations or orders without ETA`),
+    kpi("Peak Projected", money(analysis.peak_balance), analysis.limit ? percent.format(peakUtilization) + " utilization" : "Limit needed"),
+    kpi("Worst Case", money(analysis.worst_case_balance), "Peak plus every unscheduled commitment"),
+    kpi("Worst-Case Headroom", analysis.min_headroom === null ? "Set limit" : money(analysis.min_headroom), analysis.min_headroom !== null && analysis.min_headroom < 0 ? "Over limit" : "Remaining capacity"),
+    kpi("Next Arrival", nextArrival ? fmtDate(nextArrival.date) : "No ETA", nextArrival ? `${money(nextArrival.amount)} across ${nextArrival.orders} orders` : ""),
+  ].join("");
+
+  elements.creditAlert.className = `credit-alert tab-panel${state.tab === "credit" ? " active" : ""}`;
+  if (!analysis.limit) {
+    elements.creditAlert.classList.add("warning");
+    elements.creditAlert.textContent = "Set the card credit limit to calculate headroom.";
+  } else if (analysis.worst_case_balance > analysis.limit) {
+    elements.creditAlert.classList.add("danger");
+    elements.creditAlert.textContent = hasSnapshot
+      ? `Worst-case commitments exceed the limit by ${money(analysis.worst_case_balance - analysis.limit)}. Scheduled payments or fewer reservations are required.`
+      : `Even from a $0 balance, future commitments exceed the limit by ${money(analysis.worst_case_balance - analysis.limit)}. Add today's posted + pending balance for the actual shortfall.`;
+  } else if (!hasSnapshot) {
+    elements.creditAlert.classList.add("warning");
+    elements.creditAlert.textContent = `${money(analysis.scheduled_total + analysis.unscheduled_total)} of future commitments found. Add today's posted + pending balance to calculate whether the card can absorb them.`;
+  } else if (worstUtilization >= analysis.warning_utilization) {
+    elements.creditAlert.classList.add("warning");
+    elements.creditAlert.textContent = `Worst-case utilization reaches ${percent.format(worstUtilization)}, leaving ${money(analysis.min_headroom)} of headroom.`;
+  } else {
+    elements.creditAlert.classList.add("safe");
+    elements.creditAlert.textContent = `All known commitments fit with ${money(analysis.min_headroom)} of worst-case headroom.`;
+  }
+
+  elements.creditProjectionCount.textContent = `${analysis.projection.length} forecast days`;
+  elements.creditProjectionBody.innerHTML = analysis.projection
+    .map((row) => {
+      const risk = analysis.limit && row.balance > analysis.limit ? " danger" : analysis.limit && row.utilization >= analysis.warning_utilization ? " warning" : "";
+      return `<tr class="${risk.trim()}">
+        <td>${escapeHtml(fmtDate(row.date))}</td>
+        <td class="num">${money(row.charges)}</td>
+        <td class="num">${money(row.payments)}</td>
+        <td class="num"><strong>${money(row.balance)}</strong></td>
+        <td class="num">${row.available === null ? "-" : money(row.available)}</td>
+        <td class="num">${row.utilization === null ? "-" : percent.format(row.utilization)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  elements.plannedPaymentTotal.textContent = money(analysis.planned_payment_total);
+  elements.plannedPaymentList.innerHTML = analysis.payments.length
+    ? analysis.payments
+        .map(
+          (payment) => `<div class="compact-row payment-row" data-credit-payment-id="${escapeHtml(payment.id)}">
+            <div>
+              <div class="compact-title">${money(payment.amount)}</div>
+              <div class="compact-meta">${escapeHtml(fmtDate(payment.date))}${payment.note ? ` | ${escapeHtml(payment.note)}` : ""}</div>
+            </div>
+            <button class="delete-button" type="button" data-remove-credit-payment="${escapeHtml(payment.id)}">Remove</button>
+          </div>`,
+        )
+        .join("")
+    : '<div class="empty-state">No planned payments.</div>';
+
+  elements.creditArrivalCount.textContent = `${analysis.arrivals.length} days`;
+  elements.creditArrivalList.innerHTML = analysis.arrivals.length
+    ? analysis.arrivals
+        .map(
+          (row) => `<div class="compact-row">
+            <div>
+              <div class="compact-title">${escapeHtml(fmtDate(row.date))}${row.overdue ? " (overdue ETA)" : ""}</div>
+              <div class="compact-meta">${wholeNumber.format(row.orders)} orders | ${number.format(row.units)} units | ${escapeHtml(row.accounts.join(", "))}</div>
+            </div>
+            <strong>${money(row.amount)}</strong>
+          </div>`,
+        )
+        .join("")
+    : '<div class="empty-state">No active delivery dates were found.</div>';
+
+  elements.creditUnscheduledTotal.textContent = money(analysis.unscheduled_total);
+  elements.creditUnscheduledList.innerHTML = analysis.unscheduled.length
+    ? analysis.unscheduled
+        .slice(0, 30)
+        .map(
+          (event) => `<div class="compact-row">
+            <div>
+              <div class="compact-title">${escapeHtml(event.label)}</div>
+              <div class="compact-meta">${escapeHtml(event.type)} | ${escapeHtml(event.account)}${event.order_number ? ` | ${escapeHtml(event.order_number)}` : ""}</div>
+            </div>
+            <strong>${money(event.amount)}</strong>
+          </div>`,
+        )
+        .join("")
+    : '<div class="empty-state">Every active commitment has an ETA.</div>';
+
+  elements.creditCardLabel.textContent = analysis.card_label;
+  elements.creditAccountList.innerHTML = analysis.accounts.length
+    ? analysis.accounts
+        .map(
+          (row) => `<div class="compact-row">
+            <div>
+              <div class="compact-title">${escapeHtml(row.account)}</div>
+              <div class="compact-meta">${money(row.open_spend)} open BFMR retail | ${money(row.scheduled)} scheduled | ${money(row.unscheduled)} unscheduled</div>
+            </div>
+            <strong>${money(row.scheduled + row.unscheduled)}</strong>
+          </div>`,
+        )
+        .join("")
+    : '<div class="empty-state">No active account exposure.</div>';
 }
 
 function attentionScore(record) {
@@ -842,7 +1188,11 @@ function renderFilters() {
 }
 
 function renderMetadata() {
-  const generated = dataset.metadata?.generated_at ? new Date(dataset.metadata.generated_at) : null;
+  const generated = [dataset.metadata?.generated_at, dataset.metadata?.amazon_enriched_at]
+    .filter(Boolean)
+    .map((value) => new Date(value))
+    .filter((value) => !Number.isNaN(value.getTime()))
+    .sort((a, b) => b - a)[0] || null;
   const generatedText = generated
     ? generated.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     : "now";
@@ -1651,6 +2001,7 @@ function renderAll() {
   renderAttention(summary);
   renderReturns(summary, records);
   renderTable(records);
+  renderCreditPlanner();
 }
 
 function showToast(message) {
@@ -1692,6 +2043,7 @@ function renderSettings() {
   const settings = mergeSettings(settingsState);
   const assumptions = settings.assumptions;
   const chrome = settings.chrome;
+  const credit = settings.credit;
   elements.defaultCashbackRate.value = rateToPercentInput(assumptions.default_cashback_rate);
   elements.noOrderAccount.value = assumptions.no_order_account || "Personal";
   elements.noOrderCashbackRate.value = rateToPercentInput(assumptions.no_order_cashback_rate);
@@ -1730,6 +2082,22 @@ function renderSettings() {
     )
     .join("");
   elements.settingsStatus.textContent = `${(chrome.profiles || []).filter((profile) => profile.enabled !== false).length} Amazon profile(s) enabled.`;
+  if (elements.creditLimit) {
+    elements.creditLimit.value = Number(credit.limit || 0);
+    elements.creditCurrentBalance.value = Number(credit.current_balance || 0);
+    elements.creditBalanceAsOf.value = credit.balance_as_of || todayIso();
+    elements.creditChargeLeadDays.value = Number(credit.charge_lead_days ?? 1);
+    elements.creditWarningUtilization.value = Number(((Number(credit.warning_utilization) || 0.8) * 100).toFixed(1));
+    elements.creditUpdatedStatus.textContent = credit.balance_as_of
+      ? `Card snapshot saved for ${fmtDate(credit.balance_as_of)}.`
+      : "Enter the card balance that already includes posted and pending charges.";
+    if (elements.settingsCreditLimitValue) elements.settingsCreditLimitValue.textContent = credit.limit ? money(credit.limit) : "Not set";
+    if (elements.settingsCreditBalanceValue) {
+      elements.settingsCreditBalanceValue.textContent = credit.balance_as_of
+        ? `${money(credit.current_balance)} on ${fmtDate(credit.balance_as_of)}`
+        : "Not set";
+    }
+  }
 }
 
 function setActiveTab(tab) {
@@ -1748,6 +2116,19 @@ function setActiveTab(tab) {
       renderAnalytics(summary);
     });
   }
+  if (state.tab === "credit" && dataset) renderCreditPlanner();
+}
+
+function readCreditSettingsForm() {
+  const existing = mergeSettings(settingsState).credit;
+  return {
+    limit: Math.max(Number(elements.creditLimit?.value) || 0, 0),
+    current_balance: Math.max(Number(elements.creditCurrentBalance?.value) || 0, 0),
+    balance_as_of: elements.creditBalanceAsOf?.value || "",
+    charge_lead_days: Math.max(0, Math.min(14, Number(elements.creditChargeLeadDays?.value) || 0)),
+    warning_utilization: Math.max(0, Math.min(1, (Number(elements.creditWarningUtilization?.value) || 80) / 100)),
+    planned_payments: Array.isArray(existing.planned_payments) ? existing.planned_payments : [],
+  };
 }
 
 function readSettingsForm() {
@@ -1776,7 +2157,21 @@ function readSettingsForm() {
       skip_paid_orders: elements.skipPaidOrders.checked,
       profiles,
     },
+    credit: readCreditSettingsForm(),
   };
+}
+
+async function persistSettings(settings, message = "Settings saved.") {
+  const response = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || "Could not save settings.");
+  refreshDataset(result);
+  showToast(message);
+  return result;
 }
 
 async function loadData() {
@@ -1791,6 +2186,7 @@ async function loadData() {
   }
   refreshDataset(await dataResponse.json());
   resetAddonDate();
+  if (elements.plannedPaymentDate && !elements.plannedPaymentDate.value) elements.plannedPaymentDate.value = todayIso();
 }
 
 function setQuickFilter(chip) {
@@ -2291,6 +2687,76 @@ if (elements.settingsProfiles) {
     }
     settingsState.chrome.profiles.splice(Number(button.dataset.settingsRemoveProfile), 1);
     renderSettings();
+  });
+}
+
+if (elements.openCreditSettingsButton) {
+  elements.openCreditSettingsButton.addEventListener("click", () => setActiveTab("credit"));
+}
+
+if (elements.creditSettingsForm) {
+  elements.creditSettingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    elements.saveCreditSettingsButton.disabled = true;
+    elements.saveCreditSettingsButton.textContent = "Saving...";
+    try {
+      const settings = readSettingsForm();
+      await persistSettings(settings, "Card snapshot saved.");
+    } catch (error) {
+      showToast(error.message);
+      elements.creditUpdatedStatus.textContent = error.message;
+    } finally {
+      elements.saveCreditSettingsButton.disabled = false;
+      elements.saveCreditSettingsButton.textContent = "Save Card Snapshot";
+    }
+  });
+}
+
+if (elements.plannedPaymentForm) {
+  elements.plannedPaymentForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const amount = Number(elements.plannedPaymentAmount.value);
+    const date = elements.plannedPaymentDate.value;
+    if (!date || !Number.isFinite(amount) || amount <= 0) {
+      showToast("Add a valid payment date and amount.");
+      return;
+    }
+    const button = elements.plannedPaymentForm.querySelector("button[type='submit']");
+    button.disabled = true;
+    try {
+      const settings = readSettingsForm();
+      settings.credit.planned_payments.push({
+        id: `payment-${Date.now()}`,
+        date,
+        amount,
+        note: elements.plannedPaymentNote.value.trim(),
+      });
+      await persistSettings(settings, "Planned card payment added.");
+      elements.plannedPaymentForm.reset();
+      elements.plannedPaymentDate.value = todayIso();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+if (elements.plannedPaymentList) {
+  elements.plannedPaymentList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-remove-credit-payment]");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      const settings = readSettingsForm();
+      settings.credit.planned_payments = settings.credit.planned_payments.filter(
+        (payment) => String(payment.id) !== button.dataset.removeCreditPayment,
+      );
+      await persistSettings(settings, "Planned card payment removed.");
+    } catch (error) {
+      button.disabled = false;
+      showToast(error.message);
+    }
   });
 }
 

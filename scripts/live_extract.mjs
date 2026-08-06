@@ -11,7 +11,7 @@ const BFMR_URL = "https://www.bfmr.com/tracker/all";
 const AMAZON_URL = "https://www.amazon.com/gp/css/order-history?ref_=nav_orders_first";
 const ORDER_RE = /\b\d{3}-\d{7}-\d{7}\b/;
 const MANUAL_ASSUMED_ORDERS = new Set(
-  argValue("manual-assumed-orders", "111-1403104-8336261")
+  argValue("manual-assumed-orders", "")
     .split(",")
     .map((value) => normalizeOrder(value))
     .filter(Boolean),
@@ -469,7 +469,7 @@ async function extractAmazonOrderDetail(page, orderNumber) {
   const detailUrl = `https://www.amazon.com/gp/your-account/order-details?orderID=${encodeURIComponent(orderNumber)}`;
   log("Opening Amazon order detail", { orderNumber, detailUrl });
   await page.goto(detailUrl, { waitUntil: "domcontentloaded", timeout: 45000 }).catch((error) => log("Amazon navigation warning", { orderNumber, error: error.message }));
-  await waitForAmazonReady(page);
+  await waitForAmazonDetailReady(page, orderNumber);
   await page.waitForTimeout(1500);
   return page.evaluate((expectedOrder) => {
     const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -525,6 +525,29 @@ async function extractAmazonOrderDetail(page, orderNumber) {
   }, orderNumber);
 }
 
+async function waitForAmazonDetailReady(page, orderNumber) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const state = await page.evaluate((expectedOrder) => {
+      const text = document.body?.innerText || "";
+      return {
+        url: location.href,
+        title: document.title,
+        text: text.slice(0, 2400),
+        foundOrder: text.includes(expectedOrder),
+        needsLogin: /sign in|password|two-step|verification|captcha|otp|approve/i.test(text),
+      };
+    }, orderNumber).catch((error) => ({ error: error.message, text: "", foundOrder: false, needsLogin: false }));
+    const readyText = `${state.title || ""} ${state.text || ""}`;
+    const notFound = /couldn.t find|cannot find|order not found|problem displaying|no order|invalid order/i.test(readyText);
+    if (state.foundOrder || notFound || (!state.needsLogin && /order details|your orders|order placed|ordered on/i.test(readyText))) {
+      return { ...state, notFound };
+    }
+    await page.waitForTimeout(1500);
+  }
+  throw new Error(`Timed out waiting for Amazon order detail ${orderNumber}.`);
+}
+
 async function extractAmazon(profileDirectory, accountLabel) {
   const { browser, context } = await launchProfile(profileDirectory);
   const page = context.pages()[0] || await context.newPage();
@@ -533,24 +556,43 @@ async function extractAmazon(profileDirectory, accountLabel) {
     await page.goto(AMAZON_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch((error) => log("Amazon orders navigation warning", { error: error.message }));
     await waitForAmazonReady(page);
     const targets = loadAmazonTargets(accountLabel);
-    log("Loaded Amazon targets", { count: targets.length, accountLabel });
-    const rows = [];
-    for (const target of targets) {
-      const row = await extractAmazonOrderDetail(page, target.order_number);
-      if (row.found_expected_order) {
-        rows.push(row);
-        log("Captured Amazon order detail", {
-          order_number: row.order_number,
-          reward_text: row.reward_text,
-          payment_method: row.payment_method,
-          order_total: row.order_total,
-          delivery_status: row.delivery_status,
-          delivery_eta: row.delivery_eta,
-        });
-      } else {
-        log("Amazon detail did not expose expected order", { order_number: target.order_number, url: row.detail_url });
+    const requestedConcurrency = Number(argValue("concurrency", "3"));
+    const concurrency = Math.max(1, Math.min(Number.isFinite(requestedConcurrency) ? requestedConcurrency : 3, 3, targets.length || 1));
+    log("Loaded Amazon targets", { count: targets.length, accountLabel, concurrency });
+    const results = new Array(targets.length).fill(null);
+    let nextTargetIndex = 0;
+    const workers = Array.from({ length: concurrency }, async (_, workerIndex) => {
+      const workerPage = workerIndex === 0 ? page : await context.newPage();
+      try {
+        while (nextTargetIndex < targets.length) {
+          const targetIndex = nextTargetIndex;
+          nextTargetIndex += 1;
+          const target = targets[targetIndex];
+          try {
+            const row = await extractAmazonOrderDetail(workerPage, target.order_number);
+            if (row.found_expected_order) {
+              results[targetIndex] = row;
+              log("Captured Amazon order detail", {
+                order_number: row.order_number,
+                reward_text: row.reward_text,
+                payment_method: row.payment_method,
+                order_total: row.order_total,
+                delivery_status: row.delivery_status,
+                delivery_eta: row.delivery_eta,
+              });
+            } else {
+              log("Amazon detail did not expose expected order", { order_number: target.order_number, url: row.detail_url });
+            }
+          } catch (error) {
+            log("Amazon order detail failed; continuing", { order_number: target.order_number, error: error.message });
+          }
+        }
+      } finally {
+        if (workerIndex !== 0) await workerPage.close().catch(() => undefined);
       }
-    }
+    });
+    await Promise.all(workers);
+    const rows = results.filter(Boolean);
     const payload = {
       type: "amazon_order_details_live",
       source_url: page.url(),
@@ -583,8 +625,7 @@ async function extractAmazon(profileDirectory, accountLabel) {
 
 async function main() {
   const stage = argValue("stage", "bfmr");
-  const rawProfile = argValue("profile", "Default");
-  const profile = rawProfile === "Profile9" ? "Profile 9" : rawProfile;
+  const profile = argValue("profile", "Default");
   if (stage === "bfmr") {
     await extractBfmr(profile);
     return;

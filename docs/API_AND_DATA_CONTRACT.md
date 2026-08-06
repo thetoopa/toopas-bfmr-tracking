@@ -68,7 +68,7 @@ Usually the financial system should use `GET /api/data` instead because records 
 
 ### `GET /api/settings`
 
-Returns local assumptions and Chrome profile settings. Useful for audit, but not required for normal reconciliation.
+Returns local assumptions, Chrome profile settings, and card-capacity settings. Useful for audit, but not required for normal reconciliation.
 
 ### `GET /download/workbook`
 
@@ -156,6 +156,26 @@ Common accounting reasons:
 - `Accepted split row in return group`
 - `Superseded by accepted split row in return group`
 - `Scaled to BFMR paid quantity in partial return group`
+- `Consolidated paid quantity from same-tracking BFMR split row`
+- `Consolidated into paid row with the same tracking number`
+- `BFMR returned row retained for refund review`
+- `BFMR deadline row is not an active purchase`
+- `BFMR closed row retained as a non-financial audit row`
+
+`Return`/`Returned`, `Deadline`, and `Closed` rows retain raw BFMR values for audit and refund matching, while their `accounting_*` values are zero. When a paid split row shares the same order/item group, its accounting quantity and totals are scaled to the quantity BFMR actually paid. When BFMR puts the paid quantity on one row and leaves a zero-payout companion on the same order, tracking number, and item, the companion is consolidated into the paid row so the purchase is counted once.
+
+### Credit settings
+
+`settings.credit` contains local card-capacity inputs.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `limit` | number | Credit limit for the card used by the tracked orders. |
+| `current_balance` | number | Current posted plus pending balance entered by the user or a financial integration. |
+| `balance_as_of` | `YYYY-MM-DD` | Date of the balance snapshot. |
+| `charge_lead_days` | integer | Days before Amazon ETA to model the expected charge. |
+| `warning_utilization` | decimal | Utilization threshold for warning state. |
+| `planned_payments` | array | Future card payments with `id`, `date`, `amount`, and optional `note`. |
 
 ### Amazon enrichment fields
 
@@ -167,6 +187,12 @@ Common accounting reasons:
 | `amazon_profile` | string | Configured Chrome/Amazon profile label. |
 | `amazon_payment_method` | string | Amazon-visible payment method text when captured. |
 | `amazon_reward_text` | string | Amazon-visible cashback/reward text when captured. |
+| `amazon_order_total` | number | Latest scraped Amazon order total for the matched order. |
+| `amazon_counted_purchase_total` | number | Sum of BFMR accounting purchase amounts retained for this Amazon order. |
+| `amazon_purchase_gap` | number | Amazon order total minus BFMR counted purchase total. Positive values require return, refund, or missing-item review. |
+| `amazon_purchase_reconciliation` | string | `matched`, `allocated_down_to_amazon_total`, or `amazon_total_exceeds_bfmr_counted_rows`. |
+| `accounting_purchase_original` | number | BFMR accounting purchase before an Amazon-total allocation, when adjusted. |
+| `accounting_purchase_source` | string | Source of the adjusted purchase amount, such as `Amazon order total`. |
 | `cashback_rate` | number | Decimal rate, for example `0.06` for 6%. |
 | `cashback_rate_source` | string | Source or assumption used for the rate. |
 
@@ -180,6 +206,8 @@ Common accounting reasons:
 | `split_review_reason` | string | Explanation for manual review. |
 | `split_candidate_orders` | array | Possible Amazon order numbers for review. |
 | `accepted_quantity_inferred` | number | Present when paid amount implies accepted quantity. |
+
+If BFMR repeats a full Amazon order retail total across multiple line items, the tracker allocates the Amazon order total across counted BFMR rows rather than counting it repeatedly. If Amazon is higher than the accepted BFMR rows, the tracker preserves the lower BFMR accounting spend and exposes the positive `amazon_purchase_gap`; it does not silently assume that the unmatched amount was refunded.
 
 ## Add-on Fields
 

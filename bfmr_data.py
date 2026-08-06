@@ -18,21 +18,14 @@ CASHBACK_RATE = 0.06
 DEFAULT_TRACKER_EXPORT = Path("C:/Users/coope/Downloads/tracker_data (6).xlsx")
 DEFAULT_PRICE_WORKBOOK = Path("C:/Users/coope/Downloads/BFMR Tracking.xlsx")
 ORDER_NUMBER_PATTERN = re.compile(r"\b\d{3}-\d{7}-\d{7}\b")
-MANUAL_ASSUMED_ORDERS = {"111-1403104-8336261"}
+MANUAL_ASSUMED_ORDERS: set[str] = set()
 DEFAULT_SETTINGS: dict[str, Any] = {
     "assumptions": {
         "default_cashback_rate": CASHBACK_RATE,
         "no_order_account": "Personal",
         "no_order_cashback_rate": CASHBACK_RATE,
         "business_default_cashback_rate": CASHBACK_RATE,
-        "manual_assumed_orders": [
-            {
-                "order_number": "111-1403104-8336261",
-                "account": "Personal",
-                "cashback_rate": CASHBACK_RATE,
-                "note": "Manual 6% assumption per user",
-            }
-        ],
+        "manual_assumed_orders": [],
     },
     "chrome": {
         "bfmr_profile_directory": "Default",
@@ -45,14 +38,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                 "account_type": "personal",
                 "enabled": True,
             },
-            {
-                "id": "business-profile-9",
-                "name": "Business Amazon",
-                "profile_directory": "Profile9",
-                "account_type": "business",
-                "enabled": True,
-            },
         ],
+    },
+    "credit": {
+        "limit": 0.0,
+        "current_balance": 0.0,
+        "balance_as_of": "",
+        "charge_lead_days": 1,
+        "warning_utilization": 0.8,
+        "planned_payments": [],
     },
 }
 
@@ -412,13 +406,19 @@ def apply_amazon_enrichment(
     no_order_rate = assumption_float(settings, "no_order_cashback_rate", default_rate)
     no_order_account = clean_text(settings.get("assumptions", {}).get("no_order_account")) or "Personal"
     enriched = deepcopy(dataset)
+    infer_order_from_tracking(enriched.get("records", []))
     infer_partial_return_details(enriched.get("records", []))
     infer_split_return_details(enriched.get("records", []))
-    orders_by_number = {
-        normalize_order_number(order.get("order_number")): order
-        for order in amazon_orders
-        if normalize_order_number(order.get("order_number"))
-    }
+    orders_by_number: dict[str, dict[str, Any]] = {}
+    for order in amazon_orders:
+        order_number = normalize_order_number(order.get("order_number"))
+        if not order_number:
+            continue
+        existing = orders_by_number.get(order_number)
+        order_timestamp = clean_text(order.get("detail_scraped_at") or order.get("scraped_at"))
+        existing_timestamp = clean_text((existing or {}).get("detail_scraped_at") or (existing or {}).get("scraped_at"))
+        if not existing or order_timestamp >= existing_timestamp:
+            orders_by_number[order_number] = order
     matched = 0
     personal = 0
     business = 0
@@ -437,6 +437,7 @@ def apply_amazon_enrichment(
             record["amazon_delivery_eta"] = ""
             record["amazon_delivery_eta_date"] = ""
             record["amazon_delivery_scraped_at"] = ""
+            record["amazon_order_total"] = 0.0
             record["cashback_rate"] = default_rate
             record["cashback_rate_source"] = "Ignored because BFMR status is cancelled"
             record["profit"] = 0.0
@@ -452,6 +453,7 @@ def apply_amazon_enrichment(
             record["amazon_delivery_eta"] = ""
             record["amazon_delivery_eta_date"] = ""
             record["amazon_delivery_scraped_at"] = ""
+            record["amazon_order_total"] = 0.0
             record["cashback_rate"] = 0.0
             record["cashback_rate_source"] = "No cashback on BFMR referral bonus"
             record["profit"] = round(float(record.get("payout_total") or 0), 2)
@@ -477,6 +479,7 @@ def apply_amazon_enrichment(
             record["amazon_delivery_eta"] = ""
             record["amazon_delivery_eta_date"] = ""
             record["amazon_delivery_scraped_at"] = ""
+            record["amazon_order_total"] = 0.0
             record["cashback_rate"] = round(manual_rate, 4)
             record["cashback_rate_source"] = manual_note
             record["profit"] = round(
@@ -515,6 +518,7 @@ def apply_amazon_enrichment(
             if not record["amazon_delivery_eta"] and record["amazon_delivery_eta_date"]:
                 record["amazon_delivery_eta"] = record["amazon_delivery_eta_date"]
             record["amazon_delivery_scraped_at"] = clean_text(amazon.get("delivery_scraped_at"))
+            record["amazon_order_total"] = round(float(amazon.get("order_total") or 0), 2)
             record["cashback_rate"] = round(rate, 4)
             record["cashback_rate_source"] = source
         else:
@@ -532,6 +536,7 @@ def apply_amazon_enrichment(
             record["amazon_delivery_eta"] = ""
             record["amazon_delivery_eta_date"] = ""
             record["amazon_delivery_scraped_at"] = ""
+            record["amazon_order_total"] = 0.0
             record["cashback_rate"] = default_rate if order_number else no_order_rate
             record["cashback_rate_source"] = (
                 f"Default {default_rate:.0%} pending Amazon match" if order_number else f"No-order default {no_order_rate:.0%}"
@@ -548,6 +553,7 @@ def apply_amazon_enrichment(
         )
 
     apply_return_accounting(enriched.get("records", []))
+    apply_amazon_purchase_reconciliation(enriched.get("records", []), orders_by_number)
     enriched["summary"] = summarize(enriched.get("records", []))
     metadata = enriched.setdefault("metadata", {})
     active_amazon_records = [
@@ -570,6 +576,8 @@ def display_status(status: str) -> str:
     value = clean_text(status)
     if not value:
         return "Unknown"
+    if normalize_text(value) == "returned":
+        return "Return"
     return value[:1].upper() + value[1:].lower()
 
 
@@ -651,6 +659,35 @@ def infer_site_purchase_total(
     return retail_price, "BFMR site retail price", False
 
 
+def tracking_key(value: Any) -> str:
+    text = normalize_text(value)
+    if not text or text in {"not submitted", "enter tracking", "enter tracking."}:
+        return ""
+    return re.sub(r"\s+delivered$", "", text).strip()
+
+
+def infer_order_from_tracking(records: list[dict[str, Any]]) -> None:
+    orders_by_tracking: dict[str, set[str]] = defaultdict(set)
+    for record in records:
+        order_number = normalize_order_number(record.get("order_number"))
+        tracking = tracking_key(record.get("tracking"))
+        if tracking and has_amazon_order_number(order_number):
+            orders_by_tracking[tracking].add(order_number)
+
+    for record in records:
+        if has_amazon_order_number(record.get("order_number")):
+            continue
+        tracking = tracking_key(record.get("tracking"))
+        candidate_orders = orders_by_tracking.get(tracking, set())
+        if len(candidate_orders) != 1:
+            continue
+        order_number = next(iter(candidate_orders))
+        record["order_number"] = order_number
+        record["order_number_inferred"] = True
+        record["account"] = account_from_order(order_number)
+        record["account_source"] = "Inferred from matching BFMR tracking number"
+
+
 def infer_partial_return_details(records: list[dict[str, Any]]) -> None:
     candidates_by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
@@ -662,7 +699,7 @@ def infer_partial_return_details(records: list[dict[str, Any]]) -> None:
 
     for record in records:
         status = clean_text(record.get("status")).lower()
-        if status != "return" or has_amazon_order_number(record.get("order_number")):
+        if status not in {"return", "returned"} or has_amazon_order_number(record.get("order_number")):
             continue
 
         candidates = candidates_by_item.get(normalize_text(record.get("item_name")), [])
@@ -739,7 +776,9 @@ def infer_split_return_details(records: list[dict[str, Any]]) -> None:
             order_number = normalize_order_number(record.get("order_number"))
             related = [candidate for candidate in candidates if normalize_order_number(candidate.get("order_number")) == order_number]
             related_statuses = {clean_text(candidate.get("status")).lower() for candidate in related}
-            if status in {"return", "deadline"} or related_statuses.intersection({"return", "deadline"}):
+            if status in {"return", "returned", "deadline", "closed"} or related_statuses.intersection(
+                {"return", "returned", "deadline", "closed"}
+            ):
                 record["return_group_key"] = order_number
                 record["return_context"] = "Return/split group with matching same-item order rows"
             continue
@@ -783,6 +822,8 @@ def infer_split_return_details(records: list[dict[str, Any]]) -> None:
 
 def apply_return_accounting(records: list[dict[str, Any]]) -> None:
     for record in records:
+        if clean_text(record.get("status")).lower() == "returned":
+            record["status"] = "Return"
         record["accounting_purchase_total"] = round(float(record.get("purchase_total") or 0), 2)
         record["accounting_payout_total"] = round(float(record.get("payout_total") or 0), 2)
         record["accounting_amount_paid"] = round(float(record.get("amount_paid") or 0), 2)
@@ -790,6 +831,78 @@ def apply_return_accounting(records: list[dict[str, Any]]) -> None:
         record["accounting_profit"] = round(float(record.get("profit") or 0), 2)
         record["accounting_excluded"] = False
         record["accounting_reason"] = "Counted as BFMR row"
+
+        status = clean_text(record.get("status")).lower()
+        if status in {"return", "deadline", "closed"}:
+            record["accounting_purchase_total"] = 0.0
+            record["accounting_payout_total"] = 0.0
+            record["accounting_amount_paid"] = 0.0
+            record["accounting_quantity"] = 0.0
+            record["accounting_profit"] = 0.0
+            record["accounting_excluded"] = True
+            record["accounting_reason"] = {
+                "return": "BFMR returned row retained for refund review",
+                "deadline": "BFMR deadline row is not an active purchase",
+                "closed": "BFMR closed row retained as a non-financial audit row",
+            }[status]
+
+    tracking_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        order_number = normalize_order_number(record.get("order_number"))
+        tracking = tracking_key(record.get("tracking"))
+        item_name = normalize_text(record.get("item_name"))
+        if order_number and tracking and item_name and not record.get("accounting_excluded", False):
+            tracking_groups[(order_number, tracking, item_name)].append(record)
+
+    for group_rows in tracking_groups.values():
+        for paid_row in group_rows:
+            quantity = float(paid_row.get("quantity") or 0)
+            payout_per_unit = float(paid_row.get("payout_per_unit") or 0)
+            payout_total = float(paid_row.get("payout_total") or 0)
+            amount_paid = float(paid_row.get("amount_paid") or 0)
+            if quantity <= 0 or payout_per_unit <= 0 or amount_paid <= payout_total + 0.01:
+                continue
+
+            paid_units = amount_paid / payout_per_unit
+            companions = [
+                record
+                for record in group_rows
+                if record is not paid_row
+                and float(record.get("payout_total") or 0) == 0
+                and float(record.get("amount_paid") or 0) == 0
+                and not record.get("accounting_excluded", False)
+            ]
+            represented_units = quantity + sum(float(record.get("quantity") or 0) for record in companions)
+            if not companions or abs(represented_units - paid_units) > 0.01:
+                continue
+
+            purchase_total = float(paid_row.get("purchase_total") or 0)
+            purchase_per_unit = purchase_total / quantity
+            adjusted_purchase = round(purchase_per_unit * paid_units, 2)
+            paid_row["accounting_purchase_total"] = adjusted_purchase
+            paid_row["accounting_payout_total"] = round(amount_paid, 2)
+            paid_row["accounting_amount_paid"] = round(amount_paid, 2)
+            paid_row["accounting_quantity"] = round(paid_units, 4)
+            paid_row["accounting_profit"] = round(
+                calculate_profit(
+                    clean_text(paid_row.get("status")),
+                    amount_paid,
+                    adjusted_purchase,
+                    float(paid_row.get("cashback_rate") or CASHBACK_RATE),
+                ),
+                2,
+            )
+            paid_row["accounting_reason"] = "Consolidated paid quantity from same-tracking BFMR split row"
+            paid_row["accepted_quantity_inferred"] = round(paid_units, 4)
+
+            for companion in companions:
+                companion["accounting_purchase_total"] = 0.0
+                companion["accounting_payout_total"] = 0.0
+                companion["accounting_amount_paid"] = 0.0
+                companion["accounting_quantity"] = 0.0
+                companion["accounting_profit"] = 0.0
+                companion["accounting_excluded"] = True
+                companion["accounting_reason"] = "Consolidated into paid row with the same tracking number"
 
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
@@ -802,10 +915,10 @@ def apply_return_accounting(records: list[dict[str, Any]]) -> None:
 
     for group_rows in groups.values():
         statuses = {clean_text(record.get("status")).lower() for record in group_rows}
-        has_return_signal = bool(statuses.intersection({"return", "deadline"}))
+        has_return_signal = bool(statuses.intersection({"return", "returned", "deadline", "closed"}))
         has_terminal_row = any(
             clean_text(record.get("status")).lower() in {"paid", "processed", "package received", "shipped", "purchased"}
-            and clean_text(record.get("status")).lower() not in {"return", "deadline"}
+            and clean_text(record.get("status")).lower() not in {"return", "returned", "deadline", "closed"}
             for record in group_rows
         )
         if not has_return_signal or not has_terminal_row:
@@ -813,7 +926,7 @@ def apply_return_accounting(records: list[dict[str, Any]]) -> None:
 
         for record in group_rows:
             status = clean_text(record.get("status")).lower()
-            if status in {"return", "deadline"}:
+            if status in {"return", "returned", "deadline", "closed"}:
                 record["accounting_purchase_total"] = 0.0
                 record["accounting_payout_total"] = 0.0
                 record["accounting_amount_paid"] = 0.0
@@ -851,6 +964,64 @@ def apply_return_accounting(records: list[dict[str, Any]]) -> None:
                     continue
 
             record["accounting_reason"] = "Accepted split row in return group"
+
+
+def apply_amazon_purchase_reconciliation(
+    records: list[dict[str, Any]], orders_by_number: dict[str, dict[str, Any]]
+) -> None:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        order_number = normalize_order_number(record.get("order_number"))
+        if has_amazon_order_number(order_number) and clean_text(record.get("status")).lower() != "cancelled":
+            groups[order_number].append(record)
+
+    for order_number, group_rows in groups.items():
+        amazon_total = round(float((orders_by_number.get(order_number) or {}).get("order_total") or 0), 2)
+        if amazon_total <= 0:
+            continue
+        counted_rows = [record for record in group_rows if not record.get("accounting_excluded", False)]
+        if not counted_rows:
+            continue
+        counted_total = round(sum(float(record.get("accounting_purchase_total") or 0) for record in counted_rows), 2)
+        tolerance = max(1.0, amazon_total * 0.005)
+        difference = round(counted_total - amazon_total, 2)
+        reconciliation = "matched"
+        if difference > tolerance:
+            weights = [max(float(record.get("accounting_payout_total") or 0), 0) for record in counted_rows]
+            if sum(weights) <= 0:
+                weights = [max(float(record.get("accounting_quantity") or 0), 0) for record in counted_rows]
+            if sum(weights) <= 0:
+                weights = [1.0 for _ in counted_rows]
+            weight_total = sum(weights)
+            remaining = amazon_total
+            for index, (record, weight) in enumerate(zip(counted_rows, weights, strict=True)):
+                allocated = remaining if index == len(counted_rows) - 1 else round(amazon_total * weight / weight_total, 2)
+                remaining = round(remaining - allocated, 2)
+                prior_purchase = round(float(record.get("accounting_purchase_total") or 0), 2)
+                record["accounting_purchase_total"] = allocated
+                record["accounting_purchase_original"] = prior_purchase
+                record["accounting_purchase_source"] = "Amazon order total"
+                record["accounting_profit"] = round(
+                    calculate_profit(
+                        clean_text(record.get("status")),
+                        float(record.get("accounting_payout_total") or 0),
+                        allocated,
+                        float(record.get("cashback_rate") or CASHBACK_RATE),
+                    ),
+                    2,
+                )
+                record["accounting_reason"] = f"{record.get('accounting_reason')}; purchase capped to Amazon order total"
+            counted_total = amazon_total
+            reconciliation = "allocated_down_to_amazon_total"
+        elif difference < -tolerance:
+            reconciliation = "amazon_total_exceeds_bfmr_counted_rows"
+
+        gap = round(amazon_total - counted_total, 2)
+        for record in group_rows:
+            record["amazon_order_total"] = amazon_total
+            record["amazon_counted_purchase_total"] = counted_total
+            record["amazon_purchase_gap"] = gap
+            record["amazon_purchase_reconciliation"] = reconciliation
 
 
 def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -> dict[str, Any]:
@@ -913,6 +1084,7 @@ def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -
             }
         )
 
+    infer_order_from_tracking(records)
     infer_partial_return_details(records)
     infer_split_return_details(records)
     apply_return_accounting(records)
@@ -1003,6 +1175,7 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
             }
         )
 
+    infer_order_from_tracking(records)
     infer_partial_return_details(records)
     infer_split_return_details(records)
     apply_return_accounting(records)
@@ -1091,6 +1264,7 @@ def normalize_gus_tracking_sheet(tracker_sheet: Path) -> dict[str, Any]:
             }
         )
 
+    infer_order_from_tracking(records)
     infer_partial_return_details(records)
     infer_split_return_details(records)
     apply_return_accounting(records)
@@ -1112,7 +1286,11 @@ def normalize_gus_tracking_sheet(tracker_sheet: Path) -> dict[str, Any]:
 
 
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
-    active = [record for record in records if record["status"].lower() != "cancelled"]
+    active = [
+        record
+        for record in records
+        if record["status"].lower() != "cancelled" and not record.get("accounting_excluded", False)
+    ]
     paid = [record for record in active if record["status"].lower() == "paid"]
     missing_tracking = [
         record
@@ -1218,8 +1396,14 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "profit": money(sum(float(record.get("accounting_profit", record["profit"]) or 0) for record in records)),
         "cash_paid": money(sum(float(record.get("accounting_amount_paid", record["amount_paid"]) or 0) for record in records)),
         "open_payout": money(
-            sum(float(record.get("accounting_payout_total", record["payout_total"]) or 0) for record in active)
-            - sum(float(record.get("accounting_amount_paid", record["amount_paid"]) or 0) for record in records)
+            sum(
+                max(
+                    float(record.get("accounting_payout_total", record["payout_total"]) or 0)
+                    - float(record.get("accounting_amount_paid", record["amount_paid"]) or 0),
+                    0,
+                )
+                for record in active
+            )
         ),
         "missing_tracking": len(missing_tracking),
         "estimated_purchase_rows": sum(1 for record in records if record["purchase_is_estimate"]),
