@@ -522,9 +522,9 @@ def apply_amazon_enrichment(
             record["cashback_rate"] = round(rate, 4)
             record["cashback_rate_source"] = source
         else:
-            record["account"] = "Amazon unmatched" if order_number else no_order_account
+            record["account"] = no_order_account
             record["account_source"] = (
-                "Waiting for Amazon order history match"
+                f"No Amazon match; assumed {no_order_account} at {no_order_rate:.0%}"
                 if order_number
                 else f"No Amazon order number; assumed {no_order_account} at {no_order_rate:.0%}"
             )
@@ -537,9 +537,9 @@ def apply_amazon_enrichment(
             record["amazon_delivery_eta_date"] = ""
             record["amazon_delivery_scraped_at"] = ""
             record["amazon_order_total"] = 0.0
-            record["cashback_rate"] = default_rate if order_number else no_order_rate
+            record["cashback_rate"] = no_order_rate
             record["cashback_rate_source"] = (
-                f"Default {default_rate:.0%} pending Amazon match" if order_number else f"No-order default {no_order_rate:.0%}"
+                f"Unmatched-order default {no_order_rate:.0%}" if order_number else f"No-order default {no_order_rate:.0%}"
             )
 
         record["profit"] = round(

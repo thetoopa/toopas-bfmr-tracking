@@ -196,6 +196,8 @@ Common accounting reasons:
 | `cashback_rate` | number | Decimal rate, for example `0.06` for 6%. |
 | `cashback_rate_source` | string | Source or assumption used for the rate. |
 
+An order that is present in BFMR but unmatched in the configured Amazon profiles keeps `amazon_order_matched == false` for review. Its account and cashback rate use the configurable no-order fallback instead of creating an `Unknown` or `Amazon unmatched` account bucket.
+
 ### Return/split review fields
 
 | Field | Type | Meaning |

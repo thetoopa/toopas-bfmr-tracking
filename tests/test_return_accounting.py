@@ -1,6 +1,7 @@
 import unittest
 
 from bfmr_data import (
+    apply_amazon_enrichment,
     apply_amazon_purchase_reconciliation,
     apply_return_accounting,
     calculate_profit,
@@ -164,6 +165,27 @@ class ReturnAccountingTests(unittest.TestCase):
         summary = summarize([paid_overage, unpaid])
 
         self.assertEqual(summary["open_payout"], 500.0)
+
+    def test_unmatched_amazon_order_uses_configured_personal_fallback(self):
+        unmatched = record(order_number="114-0000000-0000002")
+        dataset = {"records": [unmatched], "metadata": {}}
+        settings = {
+            "assumptions": {
+                "default_cashback_rate": 0.05,
+                "no_order_account": "Personal",
+                "no_order_cashback_rate": 0.06,
+                "business_default_cashback_rate": 0.06,
+                "manual_assumed_orders": [],
+            }
+        }
+
+        enriched = apply_amazon_enrichment(dataset, [], settings)
+        result = enriched["records"][0]
+
+        self.assertEqual(result["account"], "Personal")
+        self.assertEqual(result["cashback_rate"], 0.06)
+        self.assertEqual(result["cashback_rate_source"], "Unmatched-order default 6%")
+        self.assertFalse(result["amazon_order_matched"])
 
 
 if __name__ == "__main__":
