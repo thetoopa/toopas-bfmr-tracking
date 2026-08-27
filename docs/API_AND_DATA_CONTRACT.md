@@ -82,7 +82,8 @@ The financial system should normally avoid these unless intentionally controllin
 | --- | --- | --- |
 | `POST` | `/api/rescrape-needed` | Run normal scrape: BFMR plus orders not yet paid. |
 | `POST` | `/api/rescrape-all` | One-time full scrape including paid rows. |
-| `POST` | `/api/site-sync` | Replace BFMR rows from site extractor JSON. |
+| `POST` | `/api/site-sync` | Replace live BFMR rows from site extractor JSON while retaining deduplicated historical archive rows. |
+| `POST` | `/api/import-bfmr-history` | Merge an older BFMR export without duplicating rows that migrated into the current tracker. |
 | `POST` | `/api/amazon-orders` | Import Amazon order rows. |
 | `POST` | `/api/addons` | Add manual profit item. |
 | `PATCH` | `/api/addons/{id}` | Edit manual profit item. |
@@ -106,6 +107,11 @@ Every object in `records` represents one BFMR line item after normalization and 
 | `date_processed` | `YYYY-MM-DD` string | BFMR processed date when available. |
 | `date_paid` | `YYYY-MM-DD` string | BFMR paid date when available. |
 | `month_key` | `YYYY-MM` string | Month bucket derived from `date`. |
+| `notes` | string | BFMR/import notes when available. |
+| `historical_archive` | boolean | True when the row came from a historical export that the current BFMR tracker no longer exposes. |
+| `historical_source` | string | Filename or source label for a historical archive row. |
+
+Historical imports use order number, normalized item, quantity, reserved date, and payout total as a multiset identity. A migrated row already present in the live tracker wins; only additional missing occurrences are archived. Live site refreshes retain those archived rows so lifetime totals do not shrink when BFMR omits pre-launch history.
 
 ### Order and logistics fields
 
@@ -163,6 +169,8 @@ Common accounting reasons:
 - `BFMR closed row retained as a non-financial audit row`
 
 `Return`/`Returned`, `Deadline`, and `Closed` rows retain raw BFMR values for audit and refund matching, while their `accounting_*` values are zero. When a paid split row shares the same order/item group, its accounting quantity and totals are scaled to the quantity BFMR actually paid. When BFMR puts the paid quantity on one row and leaves a zero-payout companion on the same order, tracking number, and item, the companion is consolidated into the paid row so the purchase is counted once.
+
+BFMR referral rows can be marked `Paid` while their raw `amount_paid` remains zero. For a paid `Referral Bonus` row only, `accounting_amount_paid` equals its accounting payout so collected cash and open payout reconcile with BFMR payment history.
 
 ### Credit settings
 

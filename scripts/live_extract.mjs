@@ -295,21 +295,78 @@ async function collectPaginatedRows(page) {
 
     const clickedNext = await page.evaluate(() => {
       const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-      const candidates = [...document.querySelectorAll("a,button,[role='button']")].filter((el) => {
-        const text = clean(el.innerText || el.textContent || el.getAttribute("aria-label"));
+      const explicitNext = document.querySelector(
+        ".pagination .page-item[title='Next']:not(.disabled) a, .pagination a[title='Next']:not(.disabled)",
+      );
+      if (explicitNext) {
+        explicitNext.click();
+        return true;
+      }
+      const candidates = [...document.querySelectorAll("a,button,[role='button'],li[title]")].filter((el) => {
+        const text = clean([
+          el.innerText,
+          el.textContent,
+          el.getAttribute("aria-label"),
+          el.getAttribute("title"),
+        ].filter(Boolean).join(" "));
         const disabled = el.disabled || el.getAttribute("aria-disabled") === "true" || /\bdisabled\b/i.test(el.className || "");
         return !disabled && (text === "next" || text === ">" || text === "›" || text.includes("next page"));
       });
       const next = candidates.at(-1);
       if (!next) return false;
       next.scrollIntoView({ block: "center", inline: "center" });
-      next.click();
+      (next.querySelector?.("a,button") || next).click();
       return true;
     });
     if (!clickedNext) break;
     await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => undefined);
   }
   return allRows;
+}
+
+async function configureBfmrDateRange(page) {
+  const input = page.locator("input[aria-label='Datepicker input']:visible").first();
+  if (!await input.count()) return;
+  await input.click().catch(() => undefined);
+  const thisYear = page.getByText("This Year", { exact: true });
+  if (await thisYear.count() && await thisYear.isVisible().catch(() => false)) {
+    await thisYear.click().catch(() => undefined);
+    await page.waitForTimeout(3000);
+  }
+}
+
+async function configureBfmrPageSize(page) {
+  const button = page.locator(".bf-per-page-combo-arrow").first();
+  if (!await button.count() || !await button.isVisible().catch(() => false)) return;
+  await button.click().catch(() => undefined);
+  const options = page.locator(".bf-per-page-combo-list li");
+  const count = await options.count();
+  for (let index = count - 1; index >= 0; index -= 1) {
+    if ((await options.nth(index).innerText().catch(() => "")).trim() !== "500") continue;
+    await options.nth(index).click().catch(() => undefined);
+    break;
+  }
+  await page.waitForFunction(() => {
+    const text = String(document.querySelector(".page-length")?.textContent || "").replace(/\s+/g, " ");
+    const match = text.match(/Showing\s+1\s*-\s*(\d+)\s+of\s+(\d+)/i);
+    return !match || match[1] === match[2];
+  }, null, { timeout: 20000 }).catch(() => undefined);
+  await page.waitForTimeout(1000);
+}
+
+async function bfmrExpectedRowCount(page) {
+  return page.evaluate(() => {
+    const text = String(document.querySelector(".page-length")?.textContent || "").replace(/\s+/g, " ");
+    return Number(text.match(/\bof\s+(\d+)\b/i)?.[1] || 0);
+  }).catch(() => 0);
+}
+
+function bfmrDataRows(rows) {
+  return rows.filter((row) => {
+    const status = String(row.Status || row.State || "").trim();
+    const item = String(row.Items || row.Item || row["Item Name"] || row.Product || "").trim();
+    return status && item;
+  });
 }
 
 function validBfmrRows(rows) {
@@ -340,8 +397,12 @@ async function extractBfmr(profileDirectory) {
     log("Navigating BFMR", { url: BFMR_URL });
     await page.goto(BFMR_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch((error) => log("BFMR navigation warning", { error: error.message }));
     await waitForUsefulPage(page, "bfmr");
+    await configureBfmrDateRange(page);
+    await configureBfmrPageSize(page);
     let rows = [];
     let validRows = [];
+    let dataRows = [];
+    let expectedRows = await bfmrExpectedRowCount(page);
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       await waitForBfmrGridReady(page);
       await page.evaluate(() => {
@@ -350,8 +411,10 @@ async function extractBfmr(profileDirectory) {
       }).catch(() => undefined);
       rows = await collectPaginatedRows(page);
       validRows = validBfmrRows(rows);
-      log("BFMR extraction validation", { attempt, rows: rows.length, validRows: validRows.length });
-      if (validRows.length >= 10) break;
+      dataRows = bfmrDataRows(rows);
+      expectedRows = await bfmrExpectedRowCount(page) || expectedRows;
+      log("BFMR extraction validation", { attempt, rows: rows.length, dataRows: dataRows.length, validRows: validRows.length, expectedRows });
+      if (validRows.length >= 10 && (!expectedRows || dataRows.length >= expectedRows)) break;
       if (attempt === 4) {
         log("Reloading BFMR after incomplete grid extract", { rows: rows.length, validRows: validRows.length });
         await page.reload({ waitUntil: "domcontentloaded", timeout: 45000 }).catch((error) => log("BFMR reload warning", { error: error.message }));
@@ -361,10 +424,14 @@ async function extractBfmr(profileDirectory) {
     if (validRows.length < 10) {
       throw new Error(`BFMR extraction looked invalid: only ${validRows.length} valid data rows out of ${rows.length} extracted rows. Refusing to overwrite local data.`);
     }
+    if (expectedRows && dataRows.length < expectedRows) {
+      throw new Error(`BFMR extraction was incomplete: captured ${dataRows.length} of ${expectedRows} BFMR rows. Refusing to overwrite local data.`);
+    }
     const payload = {
       type: "bfmr_tracker_rows_live",
       source_url: page.url(),
       extracted_at: new Date().toISOString(),
+      date_range: await page.locator("input[aria-label='Datepicker input']:visible").first().inputValue().catch(() => ""),
       rows,
     };
     const file = path.join(OUT_DIR, `bfmr-live-${stamp()}.json`);
@@ -488,14 +555,21 @@ async function extractAmazonOrderDetail(page, orderNumber) {
     const date =
       text.match(/Order placed\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})/i) ||
       text.match(/Ordered on\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})/i);
+    const statusTexts = [...document.querySelectorAll(".od-status-message, h4")]
+      .map((element) => clean(element.innerText || ""))
+      .filter((value) => /^(?:Arriving|Expected|Estimated(?: delivery| to arrive)|Delivery estimate|Now arriving|Out for delivery|Shipped|Preparing for shipment|Not yet shipped|Running late|Delayed|Delivered|Order received|Cancelled)/i.test(value))
+      .filter((value, index, values) => value && value.length < 180 && values.indexOf(value) === index);
+    const openStatusTexts = statusTexts.filter((value) => !/^Delivered\b/i.test(value) && !/^Cancelled\b/i.test(value));
     const deliveryPatterns = [
-      /\b(?:Arriving|Expected|Estimated delivery|Delivery estimate|Now arriving)\s+([^.\n]{3,120})/i,
+      /\b(?:Arriving|Expected|Estimated delivery|Estimated to arrive(?: by)?|Delivery estimate|Now arriving)\s+([^.\n]{3,120})/i,
       /\b(?:Out for delivery|Shipped|Preparing for shipment|Not yet shipped|Running late|Delayed)\b[^.\n]{0,120}/i,
       /\bDelivered\s+([^.\n]{0,120})/i,
     ];
     const deliveryMatch = deliveryPatterns.map((pattern) => text.match(pattern)).find(Boolean);
-    const deliveryText = clean(deliveryMatch?.[0] || "");
-    const delivered = /\bdelivered\b/i.test(deliveryText) || /\bdelivered\b/i.test(text.slice(0, 2000));
+    const deliveryText = openStatusTexts[0] || statusTexts[0] || clean(deliveryMatch?.[0] || "");
+    const delivered = statusTexts.length
+      ? openStatusTexts.length === 0 && statusTexts.some((value) => /^Delivered\b/i.test(value))
+      : /\bdelivered\b/i.test(deliveryText) || /\bdelivered\b/i.test(text.slice(0, 2000));
     const weekday = "\\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\\b";
     const monthName = "(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)";
     const etaDate =
@@ -513,7 +587,7 @@ async function extractAmazonOrderDetail(page, orderNumber) {
       order_total: total?.[1] || "",
       payment_method: payment?.[1] || "",
       reward_text: reward?.[0] || "",
-      delivery_status: delivered ? "Delivered" : deliveryText || "",
+      delivery_status: statusTexts.length ? statusTexts.join(" | ") : delivered ? "Delivered" : deliveryText || "",
       delivery_eta: delivered ? "" : clean(etaDate?.[0] || ""),
       delivery_scraped_at: new Date().toISOString(),
       detail_url: location.href,

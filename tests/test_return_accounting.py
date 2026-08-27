@@ -6,6 +6,7 @@ from bfmr_data import (
     apply_return_accounting,
     calculate_profit,
     infer_order_from_tracking,
+    merge_historical_records,
     summarize,
 )
 
@@ -32,6 +33,47 @@ def record(**overrides):
 
 
 class ReturnAccountingTests(unittest.TestCase):
+    def test_historical_merge_skips_migrated_rows_and_keeps_missing_rows(self):
+        migrated = record(
+            date="2026-05-26",
+            source_row=200,
+            item_name="Migrated item",
+            order_number="114-0000000-0000042",
+            payout_total=100.0,
+            amount_paid=100.0,
+        )
+        historical_copy = record(
+            date="2026-05-26",
+            source_row=2,
+            item_name="Migrated item",
+            order_number="114-0000000-0000042",
+            payout_total=100.0,
+            amount_paid=0.0,
+        )
+        historical_only = record(
+            date="2026-05-14",
+            source_row=3,
+            item_name="Referral Bonus",
+            order_number="",
+            payout_total=75.0,
+            amount_paid=0.0,
+            purchase_total=0.0,
+            profit=75.0,
+        )
+
+        merged, added = merge_historical_records(
+            {"records": [migrated], "metadata": {}},
+            {"records": [historical_copy, historical_only]},
+            "historical.xlsx",
+        )
+
+        self.assertEqual(added, 1)
+        self.assertEqual(len(merged["records"]), 2)
+        archived = next(row for row in merged["records"] if row["item_name"] == "Referral Bonus")
+        self.assertTrue(archived["historical_archive"])
+        self.assertEqual(archived["historical_source"], "historical.xlsx")
+        self.assertEqual(merged["metadata"]["historical_archive_rows"], 1)
+
     def test_returned_alias_excludes_duplicate_and_scales_paid_quantity(self):
         paid = record(
             item_name="Partial iPad delivery",
@@ -165,6 +207,25 @@ class ReturnAccountingTests(unittest.TestCase):
         summary = summarize([paid_overage, unpaid])
 
         self.assertEqual(summary["open_payout"], 500.0)
+
+    def test_paid_referral_counts_as_collected_cash(self):
+        referral = record(
+            item_name="Referral Bonus",
+            order_number="",
+            purchase_total=0.0,
+            payout_per_unit=100.0,
+            payout_total=100.0,
+            amount_paid=0.0,
+            cashback_rate=0.0,
+            profit=100.0,
+        )
+        apply_return_accounting([referral])
+
+        summary = summarize([referral])
+
+        self.assertEqual(referral["accounting_amount_paid"], 100.0)
+        self.assertEqual(summary["cash_paid"], 100.0)
+        self.assertEqual(summary["open_payout"], 0.0)
 
     def test_unmatched_amazon_order_uses_configured_personal_fallback(self):
         unmatched = record(order_number="114-0000000-0000002")

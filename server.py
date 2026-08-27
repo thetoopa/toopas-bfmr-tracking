@@ -18,6 +18,7 @@ from bfmr_data import (
     apply_amazon_enrichment,
     calculate_profit,
     display_status,
+    merge_historical_records,
     merged_settings,
     normalize_amazon_orders,
     normalize_bfmr_export,
@@ -267,6 +268,23 @@ def read_dataset() -> dict:
     dataset["amazon_orders"] = amazon_orders
     dataset["settings"] = settings
     return dataset
+
+
+def preserve_historical_archive(dataset: dict) -> dict:
+    if not DATA_PATH.exists():
+        return dataset
+    try:
+        previous = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return dataset
+    archived = [record for record in previous.get("records", []) if record.get("historical_archive")]
+    if not archived:
+        return dataset
+    merged, _ = merge_historical_records(dataset, {"records": archived})
+    previous_sources = previous.get("metadata", {}).get("historical_sources") or []
+    if previous_sources:
+        merged.setdefault("metadata", {})["historical_sources"] = sorted(set(previous_sources))
+    return merged
 
 
 def parse_json_body(handler: SimpleHTTPRequestHandler) -> dict:
@@ -779,6 +797,7 @@ class BfmrHandler(SimpleHTTPRequestHandler):
                 if not isinstance(rows, list) or not rows:
                     raise ValueError("No BFMR site rows were provided.")
                 dataset = normalize_bfmr_site_rows(rows, str(payload.get("source_url", "")))
+                dataset = preserve_historical_archive(dataset)
                 save_dataset(dataset, DATA_PATH)
                 rebuild_workbook()
                 self.send_json({"ok": True, **read_dataset()})
@@ -796,6 +815,7 @@ class BfmrHandler(SimpleHTTPRequestHandler):
                     raise ValueError("Upload a BFMR extractor JSON file first.")
                 rows, source_url = parse_json_upload(bfmr_upload)
                 dataset = normalize_bfmr_site_rows(rows, source_url)
+                dataset = preserve_historical_archive(dataset)
                 save_dataset(dataset, DATA_PATH)
                 rebuild_workbook()
                 self.send_json({"ok": True, **read_dataset()})
@@ -848,6 +868,28 @@ class BfmrHandler(SimpleHTTPRequestHandler):
             try:
                 details = rescrape_needed(skip_paid_orders=False, refresh_all=True)
                 self.send_json({"ok": True, **details, **read_dataset()})
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            return
+
+        if parsed.path == "/api/import-bfmr-history":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                content_type = self.headers.get("Content-Type", "")
+                uploads, _ = parse_multipart_form(content_type, self.rfile.read(content_length))
+                historical_upload = uploads.get("historical_file")
+                if not historical_upload:
+                    raise ValueError("Upload a historical BFMR tracker export first.")
+                UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+                historical_path = UPLOAD_ROOT / safe_upload_name(historical_upload[0])
+                historical_path.write_bytes(historical_upload[1])
+                historical = normalize_bfmr_export(historical_path)
+                current = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+                dataset, added = merge_historical_records(current, historical, Path(historical_upload[0]).name)
+                dataset = apply_amazon_enrichment(dataset, load_amazon_orders(), load_settings())
+                save_dataset(dataset, DATA_PATH)
+                rebuild_workbook()
+                self.send_json({"ok": True, "imported": added, **read_dataset()})
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             return

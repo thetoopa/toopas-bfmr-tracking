@@ -40,12 +40,15 @@ An example settings file lives at `examples/settings.example.json`.
 ## Imports
 
 - `Replace Data` imports a BFMR export workbook.
+- `Merge Historical BFMR Export` adds rows from an older export, skips rows already represented in the current tracker, and preserves the missing history through future live refreshes.
 - `Import Gus Tracking Sheet` imports a Google Sheets-style tracker with columns like `ITEM NAME`, `QTY`, `ORDER #`, `PURCHASE $`, `PAYOUT $`, `DATE`, `CASHBACK %`, `ACCOUNT`, and `STATUS`.
 
 ## Scraping
 
 - `Run Normal Update` refreshes BFMR, then checks Amazon orders that are not paid or need a fresh ETA.
 - `Run One-Time All` refreshes BFMR, then re-checks every non-cancelled BFMR order, including paid orders.
+
+The BFMR scraper selects the largest available page size, traverses pagination when needed, and refuses to replace local data unless the captured row count matches BFMR's own table count.
 
 Private local data such as `data/*.json`, scrape logs, uploads, and generated workbooks are ignored by git.
 

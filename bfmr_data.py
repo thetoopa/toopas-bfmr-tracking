@@ -833,6 +833,14 @@ def apply_return_accounting(records: list[dict[str, Any]]) -> None:
         record["accounting_reason"] = "Counted as BFMR row"
 
         status = clean_text(record.get("status")).lower()
+        if (
+            status == "paid"
+            and is_referral_bonus_item(record.get("item_name"))
+            and record["accounting_amount_paid"] <= 0
+        ):
+            record["accounting_amount_paid"] = record["accounting_payout_total"]
+            record["accounting_reason"] = "Paid BFMR referral counted as collected cash"
+
         if status in {"return", "deadline", "closed"}:
             record["accounting_purchase_total"] = 0.0
             record["accounting_payout_total"] = 0.0
@@ -1049,6 +1057,9 @@ def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -
         date_processed = parse_date(first_present(row, ["Date Processed", "Processed At", "Processed"]))
         date_paid = parse_date(first_present(row, ["Date Paid", "Paid At"]))
         month_key = date_reserved[:7] if date_reserved else "Unknown"
+        historical_archive = clean_text(
+            first_present(row, ["Historical Archive", "historical_archive", "Archived History"])
+        ).lower() in {"1", "true", "yes"}
 
         records.append(
             {
@@ -1059,6 +1070,7 @@ def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -
                 "order_number": order_number,
                 "tracking": clean_text(first_present(row, ["Tracking", "Tracking #", "Tracking Number"])),
                 "insurance": clean_text(first_present(row, ["Insurance"])),
+                "notes": clean_text(first_present(row, ["Notes", "Note"])),
                 "payout_per_unit": payout_per_unit,
                 "payout_total": round(payout_total, 2),
                 "received": received,
@@ -1081,6 +1093,10 @@ def normalize_bfmr_site_rows(rows: list[dict[str, Any]], source_url: str = "") -
                 "amazon_reward_text": "",
                 "status": status,
                 "status_raw": raw_status,
+                "historical_archive": historical_archive,
+                "historical_source": clean_text(
+                    first_present(row, ["Historical Source", "historical_source", "Archive Source"])
+                ),
             }
         )
 
@@ -1150,6 +1166,7 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
                 "order_number": order_number,
                 "tracking": clean_text(values.get("Tracking")),
                 "insurance": clean_text(values.get("Insurance")),
+                "notes": clean_text(values.get("Notes")),
                 "payout_per_unit": payout_per_unit,
                 "payout_total": round(payout_total, 2),
                 "received": received,
@@ -1413,6 +1430,68 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "accounts": account_rows,
         "top_items": top_items[:10],
     }
+
+
+def bfmr_record_identity(record: dict[str, Any]) -> tuple[Any, ...]:
+    """Return a stable identity that survives BFMR status and tracking updates."""
+    return (
+        normalize_order_number(record.get("order_number")),
+        normalize_text(record.get("item_name")),
+        round(float(record.get("quantity") or 0), 4),
+        parse_date(record.get("date")) or "",
+        round(float(record.get("payout_total") or 0), 2),
+    )
+
+
+def merge_historical_records(
+    primary: dict[str, Any],
+    historical: dict[str, Any],
+    historical_source: str = "",
+) -> tuple[dict[str, Any], int]:
+    """Append only historical rows missing from the primary BFMR dataset."""
+    merged = deepcopy(primary)
+    records = merged.setdefault("records", [])
+    primary_counts = Counter(bfmr_record_identity(record) for record in records)
+    matched_counts: Counter[tuple[Any, ...]] = Counter()
+    added = 0
+
+    for source_record in historical.get("records", []):
+        identity = bfmr_record_identity(source_record)
+        if matched_counts[identity] < primary_counts[identity]:
+            matched_counts[identity] += 1
+            continue
+
+        record = deepcopy(source_record)
+        record["historical_archive"] = True
+        if historical_source:
+            record["historical_source"] = historical_source
+        records.append(record)
+        matched_counts[identity] += 1
+        added += 1
+
+    infer_order_from_tracking(records)
+    infer_partial_return_details(records)
+    infer_split_return_details(records)
+    apply_return_accounting(records)
+    records.sort(
+        key=lambda record: (
+            record.get("date") or "",
+            int(record.get("source_row") or 0),
+        ),
+        reverse=True,
+    )
+    for index, record in enumerate(records, start=1):
+        record["id"] = index
+
+    metadata = merged.setdefault("metadata", {})
+    metadata["historical_archive_rows"] = sum(1 for record in records if record.get("historical_archive"))
+    if historical_source:
+        sources = set(metadata.get("historical_sources") or [])
+        sources.add(historical_source)
+        metadata["historical_sources"] = sorted(sources)
+    metadata["historical_rows_added"] = added
+    merged["summary"] = summarize(records)
+    return merged, added
 
 
 def save_dataset(dataset: dict[str, Any], output_path: Path) -> None:

@@ -181,6 +181,8 @@ const elements = {
   resetColumnPrefs: document.getElementById("resetColumnPrefs"),
   uploadForm: document.getElementById("uploadForm"),
   uploadButton: document.getElementById("uploadButton"),
+  historicalImportForm: document.getElementById("historicalImportForm"),
+  historicalImportButton: document.getElementById("historicalImportButton"),
   gusImportForm: document.getElementById("gusImportForm"),
   gusImportButton: document.getElementById("gusImportButton"),
   toast: document.getElementById("toast"),
@@ -2391,6 +2393,28 @@ elements.uploadForm.addEventListener("submit", async (event) => {
     elements.uploadButton.textContent = "Replace Data";
   }
 });
+
+if (elements.historicalImportForm) {
+  elements.historicalImportForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(elements.historicalImportForm);
+    elements.historicalImportButton.disabled = true;
+    elements.historicalImportButton.textContent = "Merging...";
+    try {
+      const response = await fetch("/api/import-bfmr-history", { method: "POST", body: formData });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Historical BFMR import failed.");
+      refreshDataset(payload, { resetFilters: true });
+      elements.historicalImportForm.reset();
+      showToast(`Merged ${payload.imported || 0} historical BFMR rows without duplicating current rows.`);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      elements.historicalImportButton.disabled = false;
+      elements.historicalImportButton.textContent = "Merge Historical BFMR Export";
+    }
+  });
+}
 
 if (elements.gusImportForm) {
   elements.gusImportForm.addEventListener("submit", async (event) => {
