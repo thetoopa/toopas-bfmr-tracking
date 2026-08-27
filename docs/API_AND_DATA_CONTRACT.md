@@ -90,6 +90,8 @@ The financial system should normally avoid these unless intentionally controllin
 | `PATCH` | `/api/records/{id}` | Edit BFMR row fields. |
 | `DELETE` | `/api/addons/{id}` | Remove manual profit item. |
 
+BFMR workbook imports accept both the legacy headers (`Reserved`, `Order No.`, `Tracking`, `Subtotal`, `Received`, `Notes`) and the current all-data export headers (`Quantity`, `Order ID`, `Tracking ID`, `Sub Total`, `Quantity Received`, `Note`).
+
 ## BFMR Record Fields
 
 Every object in `records` represents one BFMR line item after normalization and enrichment.

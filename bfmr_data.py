@@ -613,15 +613,15 @@ def load_price_lookup(price_workbook: Path | None) -> dict[str, Any]:
 
 
 def resolve_purchase_total(row_values: dict[str, Any], price_lookup: dict[str, Any]) -> tuple[float, str, bool]:
-    item = row_values.get("Items")
+    item = first_present(row_values, ["Items", "Item", "Item Name"])
     if is_referral_bonus_item(item):
         return 0.0, "Referral bonus", False
 
-    retail = parse_number(row_values.get("Retail Price"))
+    retail = parse_number(first_present(row_values, ["Retail Price", "Purchase $", "Purchase Total"]))
     if retail is not None and retail > 0:
         return retail, "BFMR Retail Price", False
 
-    order = clean_text(row_values.get("Order No."))
+    order = clean_text(first_present(row_values, ["Order No.", "Order ID", "Order #", "Order Number"]))
     exact = price_lookup["exact"].get((normalize_text(item), order))
     if exact:
         return exact["purchase_total"], "Existing tracker match", False
@@ -634,7 +634,7 @@ def resolve_purchase_total(row_values: dict[str, Any], price_lookup: dict[str, A
     if order and len(order_matches) == 1:
         return order_matches[0]["purchase_total"], "Existing tracker order match", False
 
-    payout_total = parse_number(row_values.get("Subtotal")) or 0.0
+    payout_total = parse_number(first_present(row_values, ["Subtotal", "Sub Total", "Payout Total"])) or 0.0
     return payout_total, "Payout fallback", True
 
 
@@ -1129,7 +1129,7 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
 
     wb = openpyxl.load_workbook(tracker_export, data_only=True)
     ws = wb.active
-    row = find_header_row(ws, {"Status", "Items", "Reserved", "Order No.", "Payout", "Subtotal", "Date Reserved"})
+    row = find_header_row(ws, {"Status", "Items", "Payout", "Date Reserved"})
     headers = header_map(ws, row)
 
     records: list[dict[str, Any]] = []
@@ -1140,18 +1140,18 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
         if not item or not raw_status:
             continue
 
-        quantity = parse_number(values.get("Reserved")) or 0.0
+        quantity = parse_number(first_present(values, ["Reserved", "Quantity", "Qty"])) or 0.0
         payout_per_unit = parse_number(values.get("Payout")) or 0.0
-        payout_total = parse_number(values.get("Subtotal"))
+        payout_total = parse_number(first_present(values, ["Subtotal", "Sub Total", "Payout Total"]))
         if payout_total is None:
             payout_total = payout_per_unit * quantity
         amount_paid = parse_number(values.get("Amount Paid")) or 0.0
-        received = parse_number(values.get("Received")) or 0.0
+        received = parse_number(first_present(values, ["Received", "Quantity Received"])) or 0.0
         purchase_total, price_source, price_is_estimate = resolve_purchase_total(values, price_lookup)
 
         status = display_status(raw_status)
         profit = calculate_profit(status, payout_total, purchase_total, CASHBACK_RATE)
-        order_number = clean_text(values.get("Order No."))
+        order_number = clean_text(first_present(values, ["Order No.", "Order ID", "Order #", "Order Number"]))
         date_reserved = parse_date(values.get("Date Reserved"))
         date_processed = parse_date(values.get("Date Processed"))
         date_paid = parse_date(values.get("Date Paid"))
@@ -1164,9 +1164,9 @@ def normalize_bfmr_export(tracker_export: Path, price_workbook: Path | None = No
                 "item_name": item,
                 "quantity": quantity,
                 "order_number": order_number,
-                "tracking": clean_text(values.get("Tracking")),
+                "tracking": clean_text(first_present(values, ["Tracking", "Tracking ID", "Tracking #"])),
                 "insurance": clean_text(values.get("Insurance")),
-                "notes": clean_text(values.get("Notes")),
+                "notes": clean_text(first_present(values, ["Notes", "Note"])),
                 "payout_per_unit": payout_per_unit,
                 "payout_total": round(payout_total, 2),
                 "received": received,

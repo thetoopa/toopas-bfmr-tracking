@@ -1,4 +1,8 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from openpyxl import Workbook
 
 from bfmr_data import (
     apply_amazon_enrichment,
@@ -7,6 +11,7 @@ from bfmr_data import (
     calculate_profit,
     infer_order_from_tracking,
     merge_historical_records,
+    normalize_bfmr_export,
     summarize,
 )
 
@@ -33,6 +38,66 @@ def record(**overrides):
 
 
 class ReturnAccountingTests(unittest.TestCase):
+    def test_current_bfmr_all_export_headers_are_supported(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tracker-all.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(
+                [
+                    "Status",
+                    "Items",
+                    "Quantity",
+                    "Order ID",
+                    "Tracking ID",
+                    "Insurance",
+                    "Payout",
+                    "Sub Total",
+                    "Quantity Received",
+                    "Amount Paid",
+                    "Date Reserved",
+                    "Note",
+                    "Order Deadline",
+                    "Tracking Deadline",
+                    "Retail Price",
+                    "5 or 6% Back?",
+                ]
+            )
+            sheet.append([None, None, 3, None, None, None, None, 300, 1, 100])
+            sheet.append(
+                [
+                    "paid",
+                    "Example item",
+                    3,
+                    "114-0000000-0000042",
+                    "TBA-NEW-EXPORT",
+                    "Not Applicable",
+                    100,
+                    300,
+                    1,
+                    100,
+                    "08-27-2026 10:29 AM ET",
+                    "Current export layout",
+                    None,
+                    None,
+                    330,
+                    None,
+                ]
+            )
+            workbook.save(path)
+
+            dataset = normalize_bfmr_export(path)
+
+        self.assertEqual(len(dataset["records"]), 1)
+        imported = dataset["records"][0]
+        self.assertEqual(imported["quantity"], 3.0)
+        self.assertEqual(imported["order_number"], "114-0000000-0000042")
+        self.assertEqual(imported["tracking"], "TBA-NEW-EXPORT")
+        self.assertEqual(imported["payout_total"], 300.0)
+        self.assertEqual(imported["purchase_total"], 330.0)
+        self.assertEqual(imported["received"], 1.0)
+        self.assertEqual(imported["notes"], "Current export layout")
+
     def test_historical_merge_skips_migrated_rows_and_keeps_missing_rows(self):
         migrated = record(
             date="2026-05-26",
