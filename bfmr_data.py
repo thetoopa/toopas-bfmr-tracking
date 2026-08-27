@@ -1309,6 +1309,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         if record["status"].lower() != "cancelled" and not record.get("accounting_excluded", False)
     ]
     paid = [record for record in active if record["status"].lower() == "paid"]
+    pending = [record for record in active if record["status"].lower() != "paid"]
     missing_tracking = [
         record
         for record in active
@@ -1407,10 +1408,14 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "orders": len(records),
         "active_orders": len(active),
         "paid_orders": len(paid),
+        "pending_orders": len(pending),
         "units": round(sum(float(record.get("accounting_quantity", record["quantity"]) or 0) for record in active), 2),
         "spend": money(sum(float(record.get("accounting_purchase_total", record["purchase_total"]) or 0) for record in active)),
         "payout": money(sum(float(record.get("accounting_payout_total", record["payout_total"]) or 0) for record in active)),
         "profit": money(sum(float(record.get("accounting_profit", record["profit"]) or 0) for record in records)),
+        "pending_profit": money(
+            sum(float(record.get("accounting_profit", record["profit"]) or 0) for record in pending)
+        ),
         "cash_paid": money(sum(float(record.get("accounting_amount_paid", record["amount_paid"]) or 0) for record in records)),
         "open_payout": money(
             sum(

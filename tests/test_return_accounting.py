@@ -227,6 +227,27 @@ class ReturnAccountingTests(unittest.TestCase):
         self.assertEqual(summary["cash_paid"], 100.0)
         self.assertEqual(summary["open_payout"], 0.0)
 
+    def test_pending_profit_counts_only_active_non_paid_rows(self):
+        paid = record(profit=20.0)
+        pending = record(
+            status="Shipped",
+            order_number="114-0000000-0000002",
+            amount_paid=0.0,
+            profit=12.34,
+        )
+        cancelled = record(
+            status="Cancelled",
+            order_number="114-0000000-0000003",
+            amount_paid=0.0,
+            profit=99.0,
+        )
+        apply_return_accounting([paid, pending, cancelled])
+
+        summary = summarize([paid, pending, cancelled])
+
+        self.assertEqual(summary["pending_orders"], 1)
+        self.assertEqual(summary["pending_profit"], 12.34)
+
     def test_unmatched_amazon_order_uses_configured_personal_fallback(self):
         unmatched = record(order_number="114-0000000-0000002")
         dataset = {"records": [unmatched], "metadata": {}}

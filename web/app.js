@@ -545,6 +545,7 @@ function filteredRecords() {
       state.payment === "all" ||
       (state.payment === "open" && openPayout(record) > 0) ||
       (state.payment === "paid" && activeRecord(record) && accountingPayout(record) > 0 && openPayout(record) <= 0) ||
+      (state.payment === "pending_profit" && activeRecord(record) && !record.accounting_excluded && record.status !== "Paid") ||
       (state.payment === "unpaid" && activeRecord(record) && accountingPaid(record) <= 0);
     const amazonOk =
       state.amazon === "all" ||
@@ -586,6 +587,7 @@ function filteredRecords() {
 
 function summarize(records, addons = []) {
   const active = records.filter((record) => activeRecord(record) && !record.accounting_excluded);
+  const pending = active.filter((record) => record.status !== "Paid");
   const monthly = new Map();
   const daily = new Map();
   const etaDays = new Map();
@@ -770,11 +772,13 @@ function summarize(records, addons = []) {
     orders: records.length,
     active_orders: active.length,
     paid_orders: active.filter((record) => record.status === "Paid").length,
+    pending_orders: pending.length,
     units: active.reduce((sum, record) => sum + accountingQuantity(record), 0),
     spend,
     payout,
     profit,
     product_profit: productProfit,
+    pending_profit: pending.reduce((sum, record) => sum + accountingProfit(record), 0),
     addon_profit: addonProfit,
     bfmr_referral_profit: bfmrReferralProfit + (addonCategoryTotals.bfmr_referral || 0),
     return_rows: returnRows.length,
@@ -1242,6 +1246,12 @@ function renderKpis(summary) {
     kpi("Expected Payout", money(summary.payout), "Earned only after processing, then paid later"),
     kpi("Paid Cash", money(summary.cash_paid), `${percent.format(summary.payout ? summary.cash_paid / summary.payout : 0)} of expected payout collected`, "paid_cash"),
     kpi("Awaiting Pay", money(summary.open_payout), "Reserved through processed rows not fully paid", "awaiting_pay"),
+    kpi(
+      "Pending Profit",
+      money(summary.pending_profit),
+      `${wholeNumber.format(summary.pending_orders)} active non-paid rows after cashback`,
+      "pending_profit",
+    ),
     kpi("Returns", wholeNumber.format(summary.return_rows), `${wholeNumber.format(summary.return_review_rows)} need review`, "returns"),
     kpi("Tracking Gaps", wholeNumber.format(summary.missing_tracking), "Blank or not submitted tracking", "tracking_gaps"),
     kpi("Price Fallbacks", wholeNumber.format(summary.estimated_purchase_rows), "Rows using payout as purchase estimate", "price_fallbacks"),
@@ -2244,6 +2254,10 @@ function applyKpiAction(action) {
   }
   if (action === "paid_cash") {
     state.payment = "paid";
+    state.tab = "orders";
+  }
+  if (action === "pending_profit") {
+    state.payment = "pending_profit";
     state.tab = "orders";
   }
   if (action === "returns") {

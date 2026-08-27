@@ -17,7 +17,7 @@
     <script>
       document.documentElement.dataset.theme = localStorage.getItem("toopa-theme") || "light";
     </script>
-    <link rel="stylesheet" href="/styles.css?v=20260806-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260827-1" />
   </head>
   <body>
     <header class="app-header">
@@ -28,7 +28,7 @@
         <div>
           <h1>Toopa's BFMR Tracking</h1>
           <p id="metadata" class="metadata">Loading data...</p>
-          <p class="build-marker">Build 20260806-2 | Credit capacity planner</p>
+          <p class="build-marker">Build 20260827-1 | Full-history profit reconciliation</p>
         </div>
       </div>
       <div class="header-actions">
@@ -102,6 +102,7 @@
               <option value="all">All Payments</option>
               <option value="open">Open Payout</option>
               <option value="paid">Paid Out</option>
+              <option value="pending_profit">Pending Profit Rows</option>
               <option value="unpaid">No Cash Paid</option>
             </select>
           </label>
@@ -564,6 +565,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=20260806-2"></script>
+    <script src="/app.js?v=20260827-1"></script>
   </body>
 </html>

@@ -242,11 +242,14 @@ Important fields:
 | Field | Meaning |
 | --- | --- |
 | `orders` | Raw record count. |
-| `active_orders` | Records excluding cancelled rows. |
+| `active_orders` | Accounting rows excluding cancelled and accounting-excluded records. |
+| `paid_orders` | Active accounting rows in `Paid` status. |
+| `pending_orders` | Active accounting rows whose status is not `Paid`. |
 | `units` | Sum of `accounting_quantity`. |
 | `spend` | Sum of `accounting_purchase_total`. |
 | `payout` | Sum of `accounting_payout_total`. |
 | `profit` | Product accounting profit, not including manual add-ons in the backend summary. |
+| `pending_profit` | Expected accounting profit from active rows whose status is not `Paid`. |
 | `cash_paid` | Sum of `accounting_amount_paid`. |
 | `open_payout` | Accounting payout minus accounting paid amount. |
 | `estimated_purchase_rows` | Count of rows using purchase fallback estimates. |
