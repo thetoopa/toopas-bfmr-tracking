@@ -13,7 +13,7 @@
 | `Returns` | Detailed historical return, split-delivery, original-order, and refund audit. |
 | `Amazon Audit` | Full Amazon order inventory with BFMR matching and manual purpose classification. |
 | `Reconciliation` | Current Amazon-to-BFMR results, known ID corrections, and manually resolved gaps. |
-| `Extra Profit` | Checking bonuses, BFMR referrals not already represented in Tracking, Amazon Young Adult cashback, and other income. |
+| `Extra Profit` | Checking bonuses, automatically imported paid BFMR referrals, Amazon Young Adult cashback, and other income. |
 | `Monthly` | Formula-driven monthly totals. |
 | `Checks` | Source tie-outs and the overall PASS/FAIL control. |
 | `Settings` | Assumptions, correction mappings, source totals, legend, and update instructions. |
@@ -30,14 +30,15 @@
 - Pending profit is profit on included rows whose status is not `Paid`.
 - `Log Returns` is the preferred place for new return and refund entries. `Returns` preserves the richer historical return analysis produced by normalization.
 - Return-log values do not change product profit automatically. Update the associated order only after a refund or accounting adjustment is confirmed.
-- BFMR `Referral Bonus` rows already in Tracking are product profit. Do not enter the same payment again on Extra Profit.
+- Paid BFMR `Referral Bonus` rows are automatically listed on Extra Profit and reclassified out of Product Profit. The all-in profit total does not change.
+- Automatic referral matching uses date and amount to avoid duplicating an equivalent manual `BFMR Referral` entry.
 
 ## Simple Entry Workflow
 
 1. On `Add Orders`, enter the reservation date, status, item, quantity, retail price per unit, and payout per unit.
 2. Add the Amazon order number and tracking number as they become available. Account and cashback defaults are calculated from Amazon Audit and Settings; use the override columns only when needed.
 3. On `Log Returns`, enter the order number, quantity returned, refund expected, and refund received. The workbook looks up the original quantity, spend, account, and Amazon status.
-4. Use `Extra Profit` only for bonuses and other income not already represented by a BFMR row.
+4. Paid BFMR referrals appear on `Extra Profit` automatically. Manually enter only bonuses and other income that are not already represented there.
 
 ## Refresh Inputs
 

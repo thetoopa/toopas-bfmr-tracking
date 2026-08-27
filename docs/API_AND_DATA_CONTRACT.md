@@ -80,6 +80,7 @@ The workbook is designed to remain useful without the website:
 - `Log Returns` is the simple return/refund entry layer. It looks up original quantity, spend, account, and Amazon status from `Add Orders`, `Tracking`, and `Amazon Audit`.
 - `Tracking` is the detailed normalized BFMR accounting and imported audit layer. Its initialized quantity, spend, payout, and paid values come from the normalized `accounting_*` fields, not duplicated raw BFMR rows.
 - `Dashboard` and `Monthly` are formula-driven from both `Tracking` and `Add Orders`, plus `Extra Profit` where applicable. `Checks` remains tied only to imported Tracking rows so source-snapshot controls stay stable as users add new orders.
+- The workbook generator copies paid BFMR `Referral Bonus` rows onto `Extra Profit` and removes those amounts from the displayed Product Profit subtotal. This is a presentation reclassification only; Total Profit remains unchanged, and date-plus-amount matching prevents an equivalent manual referral entry from being duplicated.
 - `Returns` preserves detailed historical return/split review context. Return-log values do not alter product profit unless the associated order is edited after a confirmed accounting adjustment.
 - `Amazon Audit` compares Amazon orders with both `Tracking` and `Add Orders`, applies the visible correction map from `Settings`, and separates personal/household and cancelled purchases from BFMR inventory exceptions.
 - `BFMR Source` preserves the imported export as an audit-only tab.
@@ -246,6 +247,8 @@ Objects in `addons` represent manual profit items.
 | `date` | `YYYY-MM-DD` string | Date to bucket the profit. |
 | `notes` | string | Optional notes. |
 | `created_at` | timestamp | Local creation timestamp. |
+
+The standalone workbook may also generate `BFMR Referral` rows on its Extra Profit tab directly from paid BFMR records. Those generated workbook rows do not mutate the backend `addons` array or the local `data/profit_addons.json` file.
 
 ## Summary Fields
 

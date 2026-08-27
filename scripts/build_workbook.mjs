@@ -31,8 +31,41 @@ const amazonHistory = normalizeAmazonHistory(fullAmazonPayload);
 const amazonCapacity = Math.max(600, amazonHistory.length + 100);
 const returnRecords = records.filter(returnRelevant);
 const returnsCapacity = Math.max(200, returnRecords.length + 50);
-const addonRows = Array.isArray(addons) ? addons : [];
-const addonCapacity = Math.max(200, addonRows.length + 50);
+const manualAddonRows = Array.isArray(addons) ? addons : [];
+const paidReferralRecords = records.filter((record) => isBfmrReferral(record) && !record.accounting_excluded && clean(record.status).toLowerCase() === "paid");
+const unmatchedManualReferrals = new Map();
+for (const addon of manualAddonRows.filter((row) => addonCategoryLabel(row.category) === "BFMR Referral")) {
+  const key = referralMatchKey(addon.date, numeric(addon.amount, 0));
+  unmatchedManualReferrals.set(key, (unmatchedManualReferrals.get(key) || 0) + 1);
+}
+const automaticReferralRows = [];
+for (const record of paidReferralRecords) {
+  const amount = referralAmount(record);
+  const key = referralMatchKey(record.date, amount);
+  const existingCount = unmatchedManualReferrals.get(key) || 0;
+  if (existingCount > 0) {
+    unmatchedManualReferrals.set(key, existingCount - 1);
+    continue;
+  }
+  automaticReferralRows.push({
+    id: `bfmr-referral-${clean(record.id) || clean(record.source_row)}`,
+    date: record.date,
+    category: "bfmr_referral",
+    description: "BFMR Referral Bonus",
+    amount,
+    notes: "Imported automatically from BFMR payment history",
+    created_at: record.date_paid || record.date_processed || record.date,
+    source: "BFMR payment history",
+    bfmr_record_id: numeric(record.id, null),
+    auto_imported: true,
+  });
+}
+const extraProfitRows = [
+  ...manualAddonRows.map((row) => ({ ...row, source: clean(row.source) || "Manual", bfmr_record_id: row.bfmr_record_id ?? null })),
+  ...automaticReferralRows,
+].sort((left, right) => (toDate(left.date)?.getTime() || 0) - (toDate(right.date)?.getTime() || 0));
+const addonCapacity = Math.max(200, extraProfitRows.length + 50);
+const paidReferralProfitTotal = paidReferralRecords.reduce((total, record) => total + referralAmount(record), 0);
 const addOrderCapacity = 250;
 const addOrderFirstRow = 5;
 const addOrderLastRow = addOrderFirstRow + addOrderCapacity - 1;
@@ -123,7 +156,7 @@ const previewRanges = {
   Returns: "A1:S25",
   "Amazon Audit": "A1:L25",
   Reconciliation: "A1:H31",
-  "Extra Profit": "A1:I20",
+  "Extra Profit": "A1:L20",
   Monthly: "A1:I25",
   Checks: "A1:G15",
   Settings: "A1:H36",
@@ -178,6 +211,15 @@ const logReturnsCheck = await workbook.inspect({
   tableMaxCols: 15,
 });
 console.log(logReturnsCheck.ndjson);
+
+const extraProfitCheck = await workbook.inspect({
+  kind: "table",
+  range: "Extra Profit!A1:L8",
+  include: "values,formulas",
+  tableMaxRows: 8,
+  tableMaxCols: 12,
+});
+console.log(extraProfitCheck.ndjson);
 
 await fs.mkdir(outputDir, { recursive: true });
 const output = await SpreadsheetFile.exportXlsx(workbook);
@@ -440,35 +482,49 @@ function buildLogReturns() {
 }
 
 function buildExtraProfit() {
-  const headers = ["Date", "Month", "Category", "Description", "Amount", "Notes", "Created At"];
-  extraProfit.getRange("A1:G1").values = [headers];
-  styleHeader(extraProfit.getRange("A1:G1"), theme.amber);
+  const headers = ["Date", "Month", "Category", "Description", "Amount", "Notes", "Created At", "Source", "BFMR Record ID"];
+  extraProfit.getRange("A1:I1").values = [headers];
+  styleHeader(extraProfit.getRange("A1:I1"), theme.amber);
   const rows = Array.from({ length: addonCapacity }, (_, index) => {
-    const addon = addonRows[index];
+    const addon = extraProfitRows[index];
     if (!addon) return Array(headers.length).fill(null);
-    return [toDate(addon.date), null, addonCategoryLabel(addon.category), clean(addon.description), numeric(addon.amount, 0), clean(addon.notes), toDate(addon.created_at)];
+    return [toDate(addon.date), null, addonCategoryLabel(addon.category), clean(addon.description), numeric(addon.amount, 0), clean(addon.notes), toDate(addon.created_at), clean(addon.source), numeric(addon.bfmr_record_id, null)];
   });
   const lastRow = addonCapacity + 1;
-  extraProfit.getRange(`A2:G${lastRow}`).values = rows;
-  styleBody(extraProfit.getRange(`A2:G${lastRow}`));
+  extraProfit.getRange(`A2:I${lastRow}`).values = rows;
+  styleBody(extraProfit.getRange(`A2:I${lastRow}`));
   extraProfit.getRange(`B2:B${lastRow}`).formulas = Array.from({ length: addonCapacity }, (_, index) => {
     const row = index + 2;
     return [`=IF(A${row}="","",TEXT(A${row},"yyyy-mm"))`];
   });
   for (const column of ["A", "C", "D", "E", "F", "G"]) extraProfit.getRange(`${column}2:${column}${lastRow}`).format.font = { color: "#0000FF" };
   extraProfit.getRange(`B2:B${lastRow}`).format.fill = theme.soft;
+  extraProfit.getRange(`H2:I${lastRow}`).format.fill = theme.soft;
+  for (let index = 0; index < extraProfitRows.length; index += 1) {
+    if (!extraProfitRows[index].auto_imported) continue;
+    const row = index + 2;
+    extraProfit.getRange(`A${row}:I${row}`).format.fill = theme.greenSoft;
+    extraProfit.getRange(`A${row}:I${row}`).format.font = { color: theme.green };
+  }
   extraProfit.getRange(`A2:A${lastRow}`).format.numberFormat = dateFormat;
   extraProfit.getRange(`E2:E${lastRow}`).format.numberFormat = currencyFormat;
   extraProfit.getRange(`G2:G${lastRow}`).format.numberFormat = dateFormat;
+  extraProfit.getRange(`I2:I${lastRow}`).format.numberFormat = integerFormat;
   extraProfit.getRange(`C2:C${lastRow}`).dataValidation = { rule: { type: "list", values: ["Checking Bonus", "BFMR Referral", "Amazon Young Adult Cashback", "Extra Profit"] } };
-  extraProfit.getRange("I1:I2").values = [["Extra Profit Total"], [null]];
-  styleHeader(extraProfit.getRange("I1"), theme.amber);
-  extraProfit.getRange("I2").formulas = [[`=SUM(E2:E${lastRow})`]];
-  extraProfit.getRange("I2").format = { fill: theme.amberSoft, font: { bold: true }, numberFormat: currencyFormat };
-  const table = extraProfit.tables.add(`A1:G${lastRow}`, true, "ExtraProfitTable");
+  extraProfit.getRange("K1:L1").values = [["Extra Profit Summary", "Value"]];
+  styleHeader(extraProfit.getRange("K1:L1"), theme.amber);
+  extraProfit.getRange("K2:L4").values = [["Total", null], ["BFMR referrals", null], ["Referral count", null]];
+  styleBody(extraProfit.getRange("K2:L4"));
+  extraProfit.getRange("L2").formulas = [[`=SUM(E2:E${lastRow})`]];
+  extraProfit.getRange("L3").formulas = [[`=SUMIF(C2:C${lastRow},"BFMR Referral",E2:E${lastRow})`]];
+  extraProfit.getRange("L4").formulas = [[`=COUNTIF(C2:C${lastRow},"BFMR Referral")`]];
+  extraProfit.getRange("L2:L3").format.numberFormat = currencyFormat;
+  extraProfit.getRange("L2:L4").format.fill = theme.amberSoft;
+  extraProfit.getRange("L2:L4").format.font = { bold: true, color: theme.ink };
+  const table = extraProfit.tables.add(`A1:I${lastRow}`, true, "ExtraProfitTable");
   table.showFilterButton = true;
   extraProfit.freezePanes.freezeRows(1);
-  setWidths(extraProfit, { A: 105, B: 90, C: 290, D: 310, E: 110, F: 340, G: 112, H: 26, I: 145 }, lastRow);
+  setWidths(extraProfit, { A: 105, B: 90, C: 220, D: 260, E: 110, F: 330, G: 112, H: 170, I: 115, J: 24, K: 170, L: 115 }, lastRow);
 }
 
 function buildReturns() {
@@ -592,7 +648,7 @@ function buildMonthly() {
       `=SUMIFS('Tracking'!$E$2:$E$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$D$${addOrderFirstRow}:$D$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
       `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
       `=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$P$${addOrderFirstRow}:$P$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
-      `=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row})+SUMIFS('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row})`,
+      `=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$V$2:$V$${trackingLast},"<>BFMR Referral")+SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$V$2:$V$${trackingLast},"BFMR Referral",'Tracking'!$B$2:$B$${trackingLast},"<>Paid")+SUMIFS('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row})`,
       `=SUMIFS('Extra Profit'!$E$2:$E$${addonLast},'Extra Profit'!$B$2:$B$${addonLast},A${row})`,
       `=F${row}+G${row}`,
       `=SUMIFS('Tracking'!$T$2:$T$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row})+SUMIFS('Add Orders'!$V$${addOrderFirstRow}:$V$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row})`,
@@ -652,7 +708,7 @@ function buildChecks() {
   styleTitle(checks.getRange("A1:G1"), theme.ink);
   checks.getRange("A3:G3").values = [["Check", "Actual", "Expected", "Difference", "Tolerance", "Status", "Where to Fix"]];
   styleHeader(checks.getRange("A3:G3"), theme.navy);
-  const rows = [["Active accounting rows", null, null, null, 0, null, "Tracking, Include column"], ["Spend ties to normalized source", null, null, null, 0.02, null, "Tracking, Subtotal column"], ["Payout ties to normalized source", null, null, null, 0.02, null, "Tracking, Payout Total column"], ["Product profit ties to normalized source", null, null, null, 0.02, null, "Tracking, Profit inputs"], ["Pending profit ties to normalized source", null, null, null, 0.02, null, "Tracking, Status and Include"], ["Cash paid ties to normalized source", null, null, null, 0.02, null, "Tracking, Amount Paid"], ["Open payout ties to normalized source", null, null, null, 0.02, null, "Tracking, Payout and Amount Paid"], ["Amazon orders needing BFMR review", null, 0, null, 0, null, "Amazon Audit, Purpose and correction map"]];
+  const rows = [["Active accounting rows", null, null, null, 0, null, "Tracking, Include column"], ["Spend ties to normalized source", null, null, null, 0.02, null, "Tracking, Subtotal column"], ["Payout ties to normalized source", null, null, null, 0.02, null, "Tracking, Payout Total column"], ["Product profit after referral reclass", null, null, null, 0.02, null, "Tracking profit and Extra Profit referrals"], ["Pending profit ties to normalized source", null, null, null, 0.02, null, "Tracking, Status and Include"], ["Cash paid ties to normalized source", null, null, null, 0.02, null, "Tracking, Amount Paid"], ["Open payout ties to normalized source", null, null, null, 0.02, null, "Tracking, Payout and Amount Paid"], ["Amazon orders needing BFMR review", null, 0, null, 0, null, "Amazon Audit, Purpose and correction map"]];
   checks.getRange("A4:G11").values = rows;
   styleBody(checks.getRange("A4:G11"));
   const trackingLast = trackingCapacity + 1;
@@ -660,7 +716,7 @@ function buildChecks() {
     [`=COUNTIFS('Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
     [`=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
     [`=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
-    [`=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>",'Tracking'!$V$2:$V$${trackingLast},"<>BFMR Referral")+SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>",'Tracking'!$V$2:$V$${trackingLast},"BFMR Referral",'Tracking'!$B$2:$B$${trackingLast},"<>Paid")`],
     [`=SUMIFS('Tracking'!$T$2:$T$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
     [`=SUMIFS('Tracking'!$M$2:$M$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
     [`=SUMIFS('Tracking'!$U$2:$U$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
@@ -698,8 +754,9 @@ function buildSettings() {
   settings.getRange("B3:B9").format.font = { color: "#0000FF" };
   settings.getRange("A11:B11").values = [["Source Snapshot Check", "Expected Value"]];
   styleHeader(settings.getRange("A11:B11"), theme.navy);
-  const extraProfitTotal = addonRows.reduce((total, addon) => total + numeric(addon.amount, 0), 0);
-  settings.getRange("A12:B21").values = [["Definition", "Expected values from the normalized BFMR export before workbook edits"], ["Active accounting rows", numeric(summary.active_orders, 0)], ["Spend", numeric(summary.spend, 0)], ["Payout", numeric(summary.payout, 0)], ["Product profit", numeric(summary.profit, 0)], ["Pending profit", numeric(summary.pending_profit, 0)], ["Cash paid", numeric(summary.cash_paid, 0)], ["Open payout", numeric(summary.open_payout, 0)], ["Extra profit", extraProfitTotal], ["Total profit including extras", numeric(summary.profit, 0) + extraProfitTotal]];
+  const extraProfitTotal = extraProfitRows.reduce((total, addon) => total + numeric(addon.amount, 0), 0);
+  const productProfitAfterReferralReclass = numeric(summary.profit, 0) - paidReferralProfitTotal;
+  settings.getRange("A12:B21").values = [["Definition", "Expected values from the normalized BFMR export before workbook edits"], ["Active accounting rows", numeric(summary.active_orders, 0)], ["Spend", numeric(summary.spend, 0)], ["Payout", numeric(summary.payout, 0)], ["Product profit after referral reclass", productProfitAfterReferralReclass], ["Pending profit", numeric(summary.pending_profit, 0)], ["Cash paid", numeric(summary.cash_paid, 0)], ["Open payout", numeric(summary.open_payout, 0)], ["Extra profit including referrals", extraProfitTotal], ["Total profit including extras", productProfitAfterReferralReclass + extraProfitTotal]];
   styleBody(settings.getRange("A12:B21"));
   settings.getRange("B14:B21").format.numberFormat = currencyFormat;
   settings.getRange("D2:D2").values = [["Editable Cell Legend"]];
@@ -719,10 +776,10 @@ function buildSettings() {
   settings.getRange("F3:G20").format.numberFormat = "@";
   settings.getRange("A24:B24").values = [["Source Metadata", "Value"]];
   styleHeader(settings.getRange("A24:B24"), theme.green);
-  settings.getRange("A25:B31").values = [["BFMR source", sourceWorkbookPath || clean(metadata.source_url) || clean(metadata.tracker_export)], ["Normalized record count", records.length], ["Detailed Amazon rows", Array.isArray(amazonOrders) ? amazonOrders.length : 0], ["Full Amazon audit rows", amazonHistory.length], ["Add Orders capacity", addOrderCapacity], ["Log Returns capacity", returnEntryCapacity], ["Accounting convention", "Cancelled and excluded return/deadline rows do not affect spend, payout, or profit"]];
+  settings.getRange("A25:B31").values = [["BFMR source", sourceWorkbookPath || clean(metadata.source_url) || clean(metadata.tracker_export)], ["Normalized record count", records.length], ["Full Amazon audit rows", amazonHistory.length], ["Automatic BFMR referral rows", automaticReferralRows.length], ["Add Orders capacity", addOrderCapacity], ["Log Returns capacity", returnEntryCapacity], ["Accounting convention", "Cancelled and excluded return/deadline rows do not affect spend, payout, or profit"]];
   styleBody(settings.getRange("A25:B31"));
   settings.getRange("A32:H36").merge(true);
-  settings.getRange("A32:A36").values = [["How to keep this workbook current"], ["1. Add each new BFMR order on Add Orders. Enter the blue cells and leave calculated cells alone."], ["2. Record new returns and refunds on Log Returns. Returns remains the detailed historical audit."], ["3. Paste new Amazon orders into Amazon Audit and classify Purpose when a row is flagged."], ["4. Add bonuses on Extra Profit, then open Checks to confirm the imported snapshot still passes."]];
+  settings.getRange("A32:A36").values = [["How to keep this workbook current"], ["1. Add each new BFMR order on Add Orders. Enter the blue cells and leave calculated cells alone."], ["2. Record new returns and refunds on Log Returns. Returns remains the detailed historical audit."], ["3. Paste new Amazon orders into Amazon Audit and classify Purpose when a row is flagged."], ["4. BFMR payment-history referrals appear on Extra Profit automatically. Add only other bonuses, then open Checks."]];
   settings.getRange("A32:H36").format = { fill: theme.blueSoft, wrapText: true, font: { color: theme.ink } };
   settings.getRange("A32:H32").format.font = { bold: true, color: theme.navy };
   settings.getRange("H4:H5").format.wrapText = true;
@@ -742,8 +799,8 @@ function buildDashboard() {
   const kpis = [
     ["A4:D4", "A5:D6", "Total Spend", `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, currencyFormat, theme.blueSoft],
     ["E4:H4", "E5:H6", "Expected Payout", `=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$P$${addOrderFirstRow}:$P$${addOrderLastRow},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, currencyFormat, theme.greenSoft],
-    ["I4:L4", "I5:L6", "Product Profit", `=SUM('Tracking'!$S$2:$S$${trackingLast})+SUM('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow})`, currencyFormat, theme.greenSoft],
-    ["M4:P4", "M5:P6", "Total Profit + Extras", `=SUM('Tracking'!$S$2:$S$${trackingLast})+SUM('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow})+SUM('Extra Profit'!$E$2:$E$${addonLast})`, currencyFormat, theme.amberSoft],
+    ["I4:L4", "I5:L6", "Product Profit", `=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$V$2:$V$${trackingLast},"<>BFMR Referral")+SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$V$2:$V$${trackingLast},"BFMR Referral",'Tracking'!$B$2:$B$${trackingLast},"<>Paid")+SUM('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow})`, currencyFormat, theme.greenSoft],
+    ["M4:P4", "M5:P6", "Total Profit + Extras", `=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$V$2:$V$${trackingLast},"<>BFMR Referral")+SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$V$2:$V$${trackingLast},"BFMR Referral",'Tracking'!$B$2:$B$${trackingLast},"<>Paid")+SUM('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow})+SUM('Extra Profit'!$E$2:$E$${addonLast})`, currencyFormat, theme.amberSoft],
     ["A8:D8", "A9:D10", "Pending Profit", `=SUM('Tracking'!$T$2:$T$${trackingLast})+SUM('Add Orders'!$V$${addOrderFirstRow}:$V$${addOrderLastRow})`, currencyFormat, theme.amberSoft],
     ["E8:H8", "E9:H10", "Open Payout", `=SUM('Tracking'!$U$2:$U$${trackingLast})+SUM('Add Orders'!$W$${addOrderFirstRow}:$W$${addOrderLastRow})`, currencyFormat, theme.blueSoft],
     ["I8:L8", "I9:L10", "Cash Paid", `=SUMIFS('Tracking'!$M$2:$M$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$Q$${addOrderFirstRow}:$Q$${addOrderLastRow},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, currencyFormat, theme.greenSoft],
@@ -863,6 +920,15 @@ function normalizeAmazonHistory(payload) {
 function addonCategoryLabel(value) {
   const labels = { checking_bonus: "Checking Bonus", bfmr_referral: "BFMR Referral", amazon_young_adult_cashback: "Amazon Young Adult Cashback", extra_profit: "Extra Profit" };
   return labels[clean(value)] || clean(value) || "Extra Profit";
+}
+function isBfmrReferral(record) {
+  return clean(record.item_name).toLowerCase() === "referral bonus" || clean(record.account).toLowerCase() === "bfmr referral";
+}
+function referralAmount(record) {
+  return numeric(record.accounting_payout_total, numeric(record.payout_total, numeric(record.accounting_profit, 0)));
+}
+function referralMatchKey(date, amount) {
+  return `${formatIsoDate(toDate(date))}|${numeric(amount, 0).toFixed(2)}`;
 }
 function minRecordDate(rows) {
   const dates = rows.map((row) => toDate(row.date)).filter((value) => value instanceof Date);
