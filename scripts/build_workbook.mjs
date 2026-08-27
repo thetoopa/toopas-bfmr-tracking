@@ -466,7 +466,16 @@ function buildChecks() {
   checks.getRange("A4:G11").values = rows;
   styleBody(checks.getRange("A4:G11"));
   const trackingLast = trackingCapacity + 1;
-  checks.getRange("B4:B11").formulas = [[`=COUNTIF('Tracking'!$A$2:$A$${trackingLast},"Yes")`], [`=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")`], [`=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")`], [`=SUM('Tracking'!$S$2:$S$${trackingLast})`], [`=SUM('Tracking'!$T$2:$T$${trackingLast})`], [`=SUMIFS('Tracking'!$M$2:$M$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")`], [`=SUM('Tracking'!$U$2:$U$${trackingLast})`], [`=COUNTIF('Amazon Audit'!$K$2:$K$${amazonCapacity + 1},"Yes")`]];
+  checks.getRange("B4:B11").formulas = [
+    [`=COUNTIFS('Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$T$2:$T$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$M$2:$M$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes",'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=SUMIFS('Tracking'!$U$2:$U$${trackingLast},'Tracking'!$AB$2:$AB$${trackingLast},"<>")`],
+    [`=COUNTIF('Amazon Audit'!$K$2:$K$${amazonCapacity + 1},"Yes")`],
+  ];
   checks.getRange("C4:C10").formulas = [["='Settings'!$B$13"], ["='Settings'!$B$14"], ["='Settings'!$B$15"], ["='Settings'!$B$16"], ["='Settings'!$B$17"], ["='Settings'!$B$18"], ["='Settings'!$B$19"]];
   checks.getRange("D4:D11").formulas = Array.from({ length: 8 }, (_, index) => { const row = index + 4; return [`=ROUND(B${row}-C${row},2)`]; });
   checks.getRange("F4:F11").formulas = Array.from({ length: 8 }, (_, index) => { const row = index + 4; return [`=IF(ABS(D${row})<=E${row},"OK","FAIL")`]; });
@@ -521,7 +530,7 @@ function buildSettings() {
   settings.getRange("A25:B29").values = [["BFMR source", sourceWorkbookPath || clean(metadata.source_url) || clean(metadata.tracker_export)], ["Normalized record count", records.length], ["Detailed Amazon rows", Array.isArray(amazonOrders) ? amazonOrders.length : 0], ["Full Amazon audit rows", amazonHistory.length], ["Accounting convention", "Cancelled and excluded return/deadline rows do not affect spend, payout, or profit"]];
   styleBody(settings.getRange("A25:B29"));
   settings.getRange("A32:H36").merge(true);
-  settings.getRange("A32:A36").values = [["How to keep this workbook current"], ["1. Add or edit BFMR rows on Tracking. Blue text cells are inputs; formula columns calculate automatically."], ["2. Paste new Amazon orders into Amazon Audit and classify Purpose. Add known order-ID corrections above when needed."], ["3. Log checking bonuses, BFMR referrals not already in Tracking, Young Adult cashback, and other income on Extra Profit."], ["4. Use Checks after each update. PASS means the workbook still ties to the imported snapshot; differences are expected after intentional new entries."]];
+  settings.getRange("A32:A36").values = [["How to keep this workbook current"], ["1. Add or edit BFMR rows on Tracking. Blue text cells are inputs; formula columns calculate automatically."], ["2. Paste new Amazon orders into Amazon Audit and classify Purpose. Add known order-ID corrections above when needed."], ["3. Log checking bonuses, BFMR referrals not already in Tracking, Young Adult cashback, and other income on Extra Profit."], ["4. Use Checks after each update. New rows with a blank Source Row update totals without breaking the imported-snapshot tie-outs."]];
   settings.getRange("A32:H36").format = { fill: theme.blueSoft, wrapText: true, font: { color: theme.ink } };
   settings.getRange("A32:H32").format.font = { bold: true, color: theme.navy };
   settings.getRange("H4:H5").format.wrapText = true;

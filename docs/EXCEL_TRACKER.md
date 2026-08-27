@@ -20,6 +20,7 @@
 ## Accounting Rules
 
 - `Tracking.Include = Yes` controls inclusion in financial totals.
+- Imported rows retain `Source Row`; manually added rows should leave it blank so snapshot tie-outs continue to test only the original import.
 - Initialized Tracking inputs use `accounting_quantity`, `accounting_purchase_total`, `accounting_payout_total`, and `accounting_amount_paid` when available.
 - Cancelled, deadline-only, superseded, and other accounting-excluded rows remain visible but initialize with `Include = No`.
 - Profit is payout minus purchase plus cashback.
