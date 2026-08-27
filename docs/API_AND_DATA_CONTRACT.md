@@ -72,7 +72,17 @@ Returns local assumptions, Chrome profile settings, and card-capacity settings. 
 
 ### `GET /download/workbook`
 
-Downloads the generated Excel workbook. Prefer `/api/data` for automated integration.
+Downloads the generated standalone Excel workbook. Prefer `/api/data` for automated integration.
+
+The workbook is designed to remain useful without the website:
+
+- `Tracking` is the editable accounting source of truth. Its initialized quantity, spend, payout, and paid values come from the normalized `accounting_*` fields, not duplicated raw BFMR rows.
+- `Dashboard`, `Monthly`, and `Checks` are formula-driven from `Tracking` and `Extra Profit`.
+- `Returns` preserves return/split review context and provides manual refund-expected and refund-received inputs. Return-log values do not alter product profit unless the corresponding `Tracking` row is edited.
+- `Amazon Audit` compares Amazon orders with `Tracking`, applies the visible correction map from `Settings`, and separates personal/household and cancelled purchases from BFMR inventory exceptions.
+- `BFMR Source` preserves the imported export as an audit-only tab.
+
+Cancelled rows and rows marked `Include = No` remain visible for audit but do not affect workbook spend, payout, profit, paid cash, or open payout. Product profit is `Payout Total - Subtotal + Cashback`, and pending profit is product profit on included rows whose status is not `Paid`.
 
 ## Mutation Endpoints
 
