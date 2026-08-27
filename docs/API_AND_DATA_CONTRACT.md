@@ -76,13 +76,15 @@ Downloads the generated standalone Excel workbook. Prefer `/api/data` for automa
 
 The workbook is designed to remain useful without the website:
 
-- `Tracking` is the editable accounting source of truth. Its initialized quantity, spend, payout, and paid values come from the normalized `accounting_*` fields, not duplicated raw BFMR rows.
-- `Dashboard`, `Monthly`, and `Checks` are formula-driven from `Tracking` and `Extra Profit`.
-- `Returns` preserves return/split review context and provides manual refund-expected and refund-received inputs. Return-log values do not alter product profit unless the corresponding `Tracking` row is edited.
-- `Amazon Audit` compares Amazon orders with `Tracking`, applies the visible correction map from `Settings`, and separates personal/household and cancelled purchases from BFMR inventory exceptions.
+- `Add Orders` is the simple daily-entry layer. Blue cells are manual inputs; include state, subtotal, payout, account, cashback, profit, lifecycle, Amazon matching, month, and quality flags are formulas.
+- `Log Returns` is the simple return/refund entry layer. It looks up original quantity, spend, account, and Amazon status from `Add Orders`, `Tracking`, and `Amazon Audit`.
+- `Tracking` is the detailed normalized BFMR accounting and imported audit layer. Its initialized quantity, spend, payout, and paid values come from the normalized `accounting_*` fields, not duplicated raw BFMR rows.
+- `Dashboard` and `Monthly` are formula-driven from both `Tracking` and `Add Orders`, plus `Extra Profit` where applicable. `Checks` remains tied only to imported Tracking rows so source-snapshot controls stay stable as users add new orders.
+- `Returns` preserves detailed historical return/split review context. Return-log values do not alter product profit unless the associated order is edited after a confirmed accounting adjustment.
+- `Amazon Audit` compares Amazon orders with both `Tracking` and `Add Orders`, applies the visible correction map from `Settings`, and separates personal/household and cancelled purchases from BFMR inventory exceptions.
 - `BFMR Source` preserves the imported export as an audit-only tab.
 
-Cancelled rows and rows marked `Include = No` remain visible for audit but do not affect workbook spend, payout, profit, paid cash, or open payout. Product profit is `Payout Total - Subtotal + Cashback`, and pending profit is product profit on included rows whose status is not `Paid`.
+Cancelled rows and rows marked `Include = No` remain visible for audit but do not affect workbook spend, payout, profit, paid cash, or open payout. Product profit is `Payout Total - Subtotal + Cashback`, and pending profit is product profit on included rows whose status is not `Paid`. The website remains a supported alternative front end for imports, scraping, and analysis.
 
 ## Mutation Endpoints
 

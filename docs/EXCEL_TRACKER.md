@@ -1,14 +1,16 @@
 # Standalone Excel Tracker
 
-`scripts/build_workbook.mjs` creates a standalone workbook for users who prefer Excel over the local website. The normal server download continues to write `outputs/Toopas_BFMR_Tracking.xlsx`.
+`scripts/build_workbook.mjs` creates a standalone workbook for users who prefer Excel for daily entry. The local website remains available for imports, scraping, and browser-based analysis. The normal server download continues to write `outputs/Toopas_BFMR_Tracking.xlsx`.
 
 ## Workbook Tabs
 
 | Tab | Purpose |
 | --- | --- |
 | `Dashboard` | Headline spend, payout, profit, pending profit, open payout, lifecycle, and reconciliation indicators. |
-| `Tracking` | Editable BFMR accounting table and the workbook's operational source of truth. |
-| `Returns` | Return, split-delivery, original-order, and refund follow-up log. |
+| `Add Orders` | Simple daily input. Enter blue cells only; spend, payout, cashback, profit, lifecycle, Amazon matching, month, and data-quality fields calculate automatically. |
+| `Log Returns` | Simple return/refund input. Enter the return facts in blue; original-order context and refund follow-up calculate automatically. |
+| `Tracking` | Detailed normalized BFMR accounting table and imported audit layer. It remains editable for corrections. |
+| `Returns` | Detailed historical return, split-delivery, original-order, and refund audit. |
 | `Amazon Audit` | Full Amazon order inventory with BFMR matching and manual purpose classification. |
 | `Reconciliation` | Current Amazon-to-BFMR results, known ID corrections, and manually resolved gaps. |
 | `Extra Profit` | Checking bonuses, BFMR referrals not already represented in Tracking, Amazon Young Adult cashback, and other income. |
@@ -19,14 +21,23 @@
 
 ## Accounting Rules
 
-- `Tracking.Include = Yes` controls inclusion in financial totals.
-- Imported rows retain `Source Row`; manually added rows should leave it blank so snapshot tie-outs continue to test only the original import.
+- New BFMR orders should normally be entered on `Add Orders`; only the blue columns require input. Optional override columns can remain blank.
+- `Tracking.Include = Yes` and `Add Orders.Include = Yes` control inclusion in financial totals.
+- Imported rows retain `Source Row`. `Checks` deliberately tests only those imported rows, so new `Add Orders` rows update live totals without changing the source-snapshot tie-outs.
 - Initialized Tracking inputs use `accounting_quantity`, `accounting_purchase_total`, `accounting_payout_total`, and `accounting_amount_paid` when available.
 - Cancelled, deadline-only, superseded, and other accounting-excluded rows remain visible but initialize with `Include = No`.
 - Profit is payout minus purchase plus cashback.
 - Pending profit is profit on included rows whose status is not `Paid`.
-- The Returns tab is an audit and refund workflow. Refund inputs do not change product profit automatically; update the corresponding Tracking row when an accounting adjustment is confirmed.
+- `Log Returns` is the preferred place for new return and refund entries. `Returns` preserves the richer historical return analysis produced by normalization.
+- Return-log values do not change product profit automatically. Update the associated order only after a refund or accounting adjustment is confirmed.
 - BFMR `Referral Bonus` rows already in Tracking are product profit. Do not enter the same payment again on Extra Profit.
+
+## Simple Entry Workflow
+
+1. On `Add Orders`, enter the reservation date, status, item, quantity, retail price per unit, and payout per unit.
+2. Add the Amazon order number and tracking number as they become available. Account and cashback defaults are calculated from Amazon Audit and Settings; use the override columns only when needed.
+3. On `Log Returns`, enter the order number, quantity returned, refund expected, and refund received. The workbook looks up the original quantity, spend, account, and Amazon status.
+4. Use `Extra Profit` only for bonuses and other income not already represented by a BFMR row.
 
 ## Refresh Inputs
 

@@ -33,6 +33,12 @@ const returnRecords = records.filter(returnRelevant);
 const returnsCapacity = Math.max(200, returnRecords.length + 50);
 const addonRows = Array.isArray(addons) ? addons : [];
 const addonCapacity = Math.max(200, addonRows.length + 50);
+const addOrderCapacity = 250;
+const addOrderFirstRow = 5;
+const addOrderLastRow = addOrderFirstRow + addOrderCapacity - 1;
+const returnEntryCapacity = 100;
+const returnEntryFirstRow = 5;
+const returnEntryLastRow = returnEntryFirstRow + returnEntryCapacity - 1;
 const coverageStart = minRecordDate(records) || new Date(2026, 4, 1);
 const generatedAt = new Date();
 
@@ -76,6 +82,8 @@ const dateFormat = "yyyy-mm-dd";
 
 const workbook = Workbook.create();
 const dashboard = workbook.worksheets.add("Dashboard");
+const addOrders = workbook.worksheets.add("Add Orders");
+const logReturns = workbook.worksheets.add("Log Returns");
 const tracking = workbook.worksheets.add("Tracking");
 const returns = workbook.worksheets.add("Returns");
 const amazonAudit = workbook.worksheets.add("Amazon Audit");
@@ -86,7 +94,7 @@ const checks = workbook.worksheets.add("Checks");
 const settings = workbook.worksheets.add("Settings");
 const bfmrSource = workbook.worksheets.add("BFMR Source");
 
-for (const sheet of [dashboard, tracking, returns, amazonAudit, reconciliation, extraProfit, monthly, checks, settings, bfmrSource]) {
+for (const sheet of [dashboard, addOrders, logReturns, tracking, returns, amazonAudit, reconciliation, extraProfit, monthly, checks, settings, bfmrSource]) {
   sheet.showGridLines = false;
 }
 
@@ -95,6 +103,8 @@ buildTracking();
 buildExtraProfit();
 buildReturns();
 buildAmazonAudit();
+buildAddOrders();
+buildLogReturns();
 buildMonthly();
 buildReconciliation();
 buildChecks();
@@ -107,6 +117,8 @@ await fs.mkdir(previewDir, { recursive: true });
 
 const previewRanges = {
   Dashboard: "A1:P48",
+  "Add Orders": "A1:AB20",
+  "Log Returns": "A1:O20",
   Tracking: "A1:AE25",
   Returns: "A1:S25",
   "Amazon Audit": "A1:L25",
@@ -148,6 +160,24 @@ const checksCheck = await workbook.inspect({
   tableMaxCols: 7,
 });
 console.log(checksCheck.ndjson);
+
+const addOrdersCheck = await workbook.inspect({
+  kind: "table",
+  range: "Add Orders!A1:AB10",
+  include: "values,formulas",
+  tableMaxRows: 10,
+  tableMaxCols: 28,
+});
+console.log(addOrdersCheck.ndjson);
+
+const logReturnsCheck = await workbook.inspect({
+  kind: "table",
+  range: "Log Returns!A1:O10",
+  include: "values,formulas",
+  tableMaxRows: 10,
+  tableMaxCols: 15,
+});
+console.log(logReturnsCheck.ndjson);
 
 await fs.mkdir(outputDir, { recursive: true });
 const output = await SpreadsheetFile.exportXlsx(workbook);
@@ -247,6 +277,166 @@ function buildTracking() {
     L: 90, M: 108, N: 105, O: 105, P: 105, Q: 92, R: 105, S: 105, T: 112, U: 108, V: 105,
     W: 108, X: 112, Y: 330, Z: 300, AA: 175, AB: 80, AC: 90, AD: 82, AE: 145,
   }, lastRow);
+}
+
+function buildAddOrders() {
+  const headers = [
+    "Date Reserved", "Status", "Item", "Qty", "Order #", "Tracking #", "Retail / Unit", "Payout / Unit",
+    "Paid Override", "Cashback Override", "Account Override", "Include Override", "Notes", "Include", "Subtotal",
+    "Payout Total", "Amount Paid", "Account", "Cashback %", "Cashback $", "Profit", "Pending Profit", "Open Payout",
+    "Lifecycle", "Amazon Matched", "Amazon Status / ETA", "Month", "Data Quality",
+  ];
+  addOrders.getRange("A1:AB1").merge();
+  addOrders.getRange("A1").values = [["Add Orders"]];
+  styleTitle(addOrders.getRange("A1:AB1"), theme.ink);
+  addOrders.getRange("A2:M2").merge();
+  addOrders.getRange("N2:AB2").merge();
+  addOrders.getRange("A2").values = [["Enter only the blue cells. Item, quantity, and prices are the core inputs."]];
+  addOrders.getRange("N2").values = [["Everything to the right is calculated automatically."]];
+  addOrders.getRange("A2:M2").format = { fill: theme.blueSoft, font: { bold: true, color: theme.blue }, horizontalAlignment: "center", verticalAlignment: "center" };
+  addOrders.getRange("N2:AB2").format = { fill: theme.soft, font: { bold: true, color: theme.muted }, horizontalAlignment: "center", verticalAlignment: "center" };
+  addOrders.getRange("A3:AB3").format.rowHeightPx = 8;
+  addOrders.getRange("A4:AB4").values = [headers];
+  styleHeader(addOrders.getRange("A4:M4"), theme.blue);
+  styleHeader(addOrders.getRange("N4:AB4"), theme.navy);
+  addOrders.getRange(`A${addOrderFirstRow}:AB${addOrderLastRow}`).values = Array.from(
+    { length: addOrderCapacity },
+    () => Array(headers.length).fill(null),
+  );
+  styleBody(addOrders.getRange(`A${addOrderFirstRow}:AB${addOrderLastRow}`));
+
+  const formulas = Array.from({ length: addOrderCapacity }, (_, index) => {
+    const row = addOrderFirstRow + index;
+    const auditLast = amazonCapacity + 1;
+    return {
+      include: `=IF(C${row}="","",IF(L${row}<>"",L${row},IF(OR(B${row}="Cancelled",B${row}="Deadline",B${row}="Closed",B${row}="Return",B${row}="Returned"),"No","Yes")))`,
+      subtotal: `=IF(C${row}="","",ROUND(D${row}*G${row},2))`,
+      payout: `=IF(C${row}="","",ROUND(D${row}*H${row},2))`,
+      paid: `=IF(C${row}="","",IF(I${row}<>"",I${row},IF(B${row}="Paid",P${row},0)))`,
+      account: `=IF(C${row}="","",IF(K${row}<>"",K${row},IF(LOWER(C${row})="referral bonus","BFMR Referral",IF(E${row}="","Personal",IF(COUNTIFS('Amazon Audit'!$C$2:$C$${auditLast},E${row},'Amazon Audit'!$A$2:$A$${auditLast},"Business")>0,"Business",IF(COUNTIFS('Amazon Audit'!$C$2:$C$${auditLast},E${row},'Amazon Audit'!$A$2:$A$${auditLast},"Personal")>0,"Personal","Personal"))))))`,
+      cashbackRate: `=IF(C${row}="","",IF(J${row}<>"",J${row},IF(R${row}="BFMR Referral",0,IF(R${row}="Business",'Settings'!$B$6,'Settings'!$B$5))))`,
+      cashback: `=IF(C${row}="","",IF(N${row}<>"Yes",0,ROUND(O${row}*S${row},2)))`,
+      profit: `=IF(C${row}="","",IF(N${row}<>"Yes",0,ROUND(P${row}-O${row}+T${row},2)))`,
+      pending: `=IF(C${row}="","",IF(AND(N${row}="Yes",B${row}<>"Paid"),U${row},0))`,
+      open: `=IF(C${row}="","",IF(N${row}<>"Yes",0,MAX(P${row}-Q${row},0)))`,
+      lifecycle: `=IF(C${row}="","",IF(N${row}<>"Yes","Excluded",IF(B${row}="Paid","Paid",IF(OR(B${row}="Processed",B${row}="Return",B${row}="Returned"),"Processed",IF(OR(B${row}="Package Received",B${row}="Pkg Received"),"Package Received",IF(OR(B${row}="Shipped",AND(F${row}<>"",LOWER(F${row})<>"not submitted")),"Shipped",IF(OR(B${row}="Purchased",B${row}="Ordered",E${row}<>""),"Ordered","Reserved")))))))`,
+      amazonMatched: `=IF(C${row}="","",IF(E${row}="","No",IF(COUNTIF('Amazon Audit'!$C$2:$C$${auditLast},E${row})>0,"Yes","No")))`,
+      amazonStatus: `=IF(C${row}="","",IFERROR(INDEX('Amazon Audit'!$E$2:$E$${auditLast},MATCH(E${row},'Amazon Audit'!$C$2:$C$${auditLast},0)),""))`,
+      month: `=IF(A${row}="","",TEXT(A${row},"yyyy-mm"))`,
+      quality: `=IF(C${row}="","",IF(N${row}<>"Yes","Excluded",IF(LOWER(C${row})="referral bonus","OK",IF(D${row}<=0,"Missing qty",IF(A${row}="","Missing date",IF(AND(OR(X${row}="Ordered",X${row}="Shipped",X${row}="Package Received",X${row}="Processed",X${row}="Paid"),E${row}=""),"Missing order #",IF(AND(OR(X${row}="Shipped",X${row}="Package Received",X${row}="Processed",X${row}="Paid"),OR(F${row}="",LOWER(F${row})="not submitted")),"Missing tracking","OK")))))))`,
+    };
+  });
+  addOrders.getRange(`N${addOrderFirstRow}:N${addOrderLastRow}`).formulas = formulas.map((row) => [row.include]);
+  addOrders.getRange(`O${addOrderFirstRow}:O${addOrderLastRow}`).formulas = formulas.map((row) => [row.subtotal]);
+  addOrders.getRange(`P${addOrderFirstRow}:P${addOrderLastRow}`).formulas = formulas.map((row) => [row.payout]);
+  addOrders.getRange(`Q${addOrderFirstRow}:Q${addOrderLastRow}`).formulas = formulas.map((row) => [row.paid]);
+  addOrders.getRange(`R${addOrderFirstRow}:R${addOrderLastRow}`).formulas = formulas.map((row) => [row.account]);
+  addOrders.getRange(`S${addOrderFirstRow}:S${addOrderLastRow}`).formulas = formulas.map((row) => [row.cashbackRate]);
+  addOrders.getRange(`T${addOrderFirstRow}:T${addOrderLastRow}`).formulas = formulas.map((row) => [row.cashback]);
+  addOrders.getRange(`U${addOrderFirstRow}:U${addOrderLastRow}`).formulas = formulas.map((row) => [row.profit]);
+  addOrders.getRange(`V${addOrderFirstRow}:V${addOrderLastRow}`).formulas = formulas.map((row) => [row.pending]);
+  addOrders.getRange(`W${addOrderFirstRow}:W${addOrderLastRow}`).formulas = formulas.map((row) => [row.open]);
+  addOrders.getRange(`X${addOrderFirstRow}:X${addOrderLastRow}`).formulas = formulas.map((row) => [row.lifecycle]);
+  addOrders.getRange(`Y${addOrderFirstRow}:Y${addOrderLastRow}`).formulas = formulas.map((row) => [row.amazonMatched]);
+  addOrders.getRange(`Z${addOrderFirstRow}:Z${addOrderLastRow}`).formulas = formulas.map((row) => [row.amazonStatus]);
+  addOrders.getRange(`AA${addOrderFirstRow}:AA${addOrderLastRow}`).formulas = formulas.map((row) => [row.month]);
+  addOrders.getRange(`AB${addOrderFirstRow}:AB${addOrderLastRow}`).formulas = formulas.map((row) => [row.quality]);
+
+  addOrders.getRange(`A${addOrderFirstRow}:M${addOrderLastRow}`).format.fill = theme.blueSoft;
+  addOrders.getRange(`A${addOrderFirstRow}:M${addOrderLastRow}`).format.font = { color: theme.blue };
+  addOrders.getRange(`N${addOrderFirstRow}:AB${addOrderLastRow}`).format.fill = theme.soft;
+  addOrders.getRange(`N${addOrderFirstRow}:AB${addOrderLastRow}`).format.font = { color: theme.ink };
+  addOrders.getRange(`B${addOrderFirstRow}:B${addOrderLastRow}`).dataValidation = { rule: { type: "list", values: ["Reserved", "Purchased", "Ordered", "Shipped", "Package Received", "Processed", "Paid", "Deadline", "Closed", "Return", "Returned", "Cancelled"] } };
+  addOrders.getRange(`K${addOrderFirstRow}:K${addOrderLastRow}`).dataValidation = { rule: { type: "list", values: ["Personal", "Business", "BFMR Referral", "Other"] } };
+  addOrders.getRange(`L${addOrderFirstRow}:L${addOrderLastRow}`).dataValidation = { rule: { type: "list", values: ["Yes", "No"] } };
+  addOrders.getRange(`A${addOrderFirstRow}:A${addOrderLastRow}`).format.numberFormat = dateFormat;
+  addOrders.getRange(`D${addOrderFirstRow}:D${addOrderLastRow}`).format.numberFormat = "0.00";
+  addOrders.getRange(`E${addOrderFirstRow}:F${addOrderLastRow}`).format.numberFormat = "@";
+  addOrders.getRange(`G${addOrderFirstRow}:I${addOrderLastRow}`).format.numberFormat = currencyFormat;
+  addOrders.getRange(`J${addOrderFirstRow}:J${addOrderLastRow}`).format.numberFormat = percentFormat;
+  addOrders.getRange(`O${addOrderFirstRow}:Q${addOrderLastRow}`).format.numberFormat = currencyFormat;
+  addOrders.getRange(`S${addOrderFirstRow}:S${addOrderLastRow}`).format.numberFormat = percentFormat;
+  addOrders.getRange(`T${addOrderFirstRow}:W${addOrderLastRow}`).format.numberFormat = currencyFormat;
+  addOrders.getRange(`B${addOrderFirstRow}:B${addOrderLastRow}`).conditionalFormats.addCustom(`=$B${addOrderFirstRow}="Paid"`, { fill: theme.greenSoft, font: { color: theme.green } });
+  addOrders.getRange(`B${addOrderFirstRow}:B${addOrderLastRow}`).conditionalFormats.addCustom(`=$B${addOrderFirstRow}="Cancelled"`, { fill: theme.redSoft, font: { color: theme.red } });
+  addOrders.getRange(`AB${addOrderFirstRow}:AB${addOrderLastRow}`).conditionalFormats.addCustom(`=$AB${addOrderFirstRow}="OK"`, { fill: theme.greenSoft, font: { color: theme.green } });
+  addOrders.getRange(`AB${addOrderFirstRow}:AB${addOrderLastRow}`).conditionalFormats.addCustom(`=AND($AB${addOrderFirstRow}<>"",$AB${addOrderFirstRow}<>"OK",$AB${addOrderFirstRow}<>"Excluded")`, { fill: theme.amberSoft, font: { color: theme.amber } });
+  const table = addOrders.tables.add(`A4:AB${addOrderLastRow}`, true, "AddOrdersTable");
+  table.showFilterButton = true;
+  addOrders.freezePanes.freezeRows(4);
+  addOrders.freezePanes.freezeColumns(4);
+  setWidths(addOrders, { A: 105, B: 120, C: 340, D: 70, E: 165, F: 190, G: 110, H: 110, I: 110, J: 115, K: 115, L: 105, M: 280, N: 75, O: 105, P: 110, Q: 105, R: 105, S: 92, T: 105, U: 105, V: 110, W: 105, X: 125, Y: 110, Z: 180, AA: 90, AB: 145 }, addOrderLastRow);
+}
+
+function buildLogReturns() {
+  const headers = [
+    "Return Date", "Order #", "Item", "Qty Returned", "Return Status", "Refund Expected", "Refund Received",
+    "Refund Date", "Notes", "Original Qty", "Original Spend", "Refund Remaining", "Account", "Amazon Status", "Review Needed",
+  ];
+  logReturns.getRange("A1:O1").merge();
+  logReturns.getRange("A1").values = [["Log Returns"]];
+  styleTitle(logReturns.getRange("A1:O1"), theme.ink);
+  logReturns.getRange("A2:I2").merge();
+  logReturns.getRange("J2:O2").merge();
+  logReturns.getRange("A2").values = [["Enter the return and refund details in blue. Item is optional when the whole order was returned."]];
+  logReturns.getRange("J2").values = [["Order context and refund follow-up calculate automatically."]];
+  logReturns.getRange("A2:I2").format = { fill: theme.blueSoft, font: { bold: true, color: theme.blue }, horizontalAlignment: "center", verticalAlignment: "center" };
+  logReturns.getRange("J2:O2").format = { fill: theme.soft, font: { bold: true, color: theme.muted }, horizontalAlignment: "center", verticalAlignment: "center" };
+  logReturns.getRange("A3:O3").format.rowHeightPx = 8;
+  logReturns.getRange("A4:O4").values = [headers];
+  styleHeader(logReturns.getRange("A4:I4"), theme.blue);
+  styleHeader(logReturns.getRange("J4:O4"), theme.navy);
+  logReturns.getRange(`A${returnEntryFirstRow}:O${returnEntryLastRow}`).values = Array.from(
+    { length: returnEntryCapacity },
+    () => Array(headers.length).fill(null),
+  );
+  styleBody(logReturns.getRange(`A${returnEntryFirstRow}:O${returnEntryLastRow}`));
+  const trackingLast = trackingCapacity + 1;
+  const auditLast = amazonCapacity + 1;
+  const formulas = Array.from({ length: returnEntryCapacity }, (_, index) => {
+    const row = returnEntryFirstRow + index;
+    const addQtyByOrder = `SUMIFS('Add Orders'!$D$${addOrderFirstRow}:$D$${addOrderLastRow},'Add Orders'!$E$${addOrderFirstRow}:$E$${addOrderLastRow},B${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`;
+    const addQtyByItem = `SUMIFS('Add Orders'!$D$${addOrderFirstRow}:$D$${addOrderLastRow},'Add Orders'!$E$${addOrderFirstRow}:$E$${addOrderLastRow},B${row},'Add Orders'!$C$${addOrderFirstRow}:$C$${addOrderLastRow},C${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`;
+    const trackingQtyByOrder = `SUMIFS('Tracking'!$E$2:$E$${trackingLast},'Tracking'!$F$2:$F$${trackingLast},B${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`;
+    const trackingQtyByItem = `SUMIFS('Tracking'!$E$2:$E$${trackingLast},'Tracking'!$F$2:$F$${trackingLast},B${row},'Tracking'!$D$2:$D$${trackingLast},C${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`;
+    const addSpendByOrder = `SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$E$${addOrderFirstRow}:$E$${addOrderLastRow},B${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`;
+    const addSpendByItem = `SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$E$${addOrderFirstRow}:$E$${addOrderLastRow},B${row},'Add Orders'!$C$${addOrderFirstRow}:$C$${addOrderLastRow},C${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`;
+    const trackingSpendByOrder = `SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$F$2:$F$${trackingLast},B${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`;
+    const trackingSpendByItem = `SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$F$2:$F$${trackingLast},B${row},'Tracking'!$D$2:$D$${trackingLast},C${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`;
+    return {
+      originalQty: `=IF(B${row}="","",IF(C${row}<>"",${addQtyByItem}+${trackingQtyByItem},${addQtyByOrder}+${trackingQtyByOrder}))`,
+      originalSpend: `=IF(B${row}="","",IF(C${row}<>"",${addSpendByItem}+${trackingSpendByItem},${addSpendByOrder}+${trackingSpendByOrder}))`,
+      remaining: `=IF(B${row}="","",MAX(F${row}-G${row},0))`,
+      account: `=IF(B${row}="","",IFERROR(INDEX('Add Orders'!$R$${addOrderFirstRow}:$R$${addOrderLastRow},MATCH(B${row},'Add Orders'!$E$${addOrderFirstRow}:$E$${addOrderLastRow},0)),IFERROR(INDEX('Tracking'!$V$2:$V$${trackingLast},MATCH(B${row},'Tracking'!$F$2:$F$${trackingLast},0)),"Personal")))`,
+      amazonStatus: `=IF(B${row}="","",IFERROR(INDEX('Amazon Audit'!$E$2:$E$${auditLast},MATCH(B${row},'Amazon Audit'!$C$2:$C$${auditLast},0)),"Not found"))`,
+      review: `=IF(B${row}="","",IF(J${row}=0,"Order not found",IF(D${row}>J${row},"Qty exceeds order",IF(F${row}="","Enter expected refund",IF(L${row}>0,"Yes","No")))))`,
+    };
+  });
+  logReturns.getRange(`J${returnEntryFirstRow}:J${returnEntryLastRow}`).formulas = formulas.map((row) => [row.originalQty]);
+  logReturns.getRange(`K${returnEntryFirstRow}:K${returnEntryLastRow}`).formulas = formulas.map((row) => [row.originalSpend]);
+  logReturns.getRange(`L${returnEntryFirstRow}:L${returnEntryLastRow}`).formulas = formulas.map((row) => [row.remaining]);
+  logReturns.getRange(`M${returnEntryFirstRow}:M${returnEntryLastRow}`).formulas = formulas.map((row) => [row.account]);
+  logReturns.getRange(`N${returnEntryFirstRow}:N${returnEntryLastRow}`).formulas = formulas.map((row) => [row.amazonStatus]);
+  logReturns.getRange(`O${returnEntryFirstRow}:O${returnEntryLastRow}`).formulas = formulas.map((row) => [row.review]);
+  logReturns.getRange(`A${returnEntryFirstRow}:I${returnEntryLastRow}`).format.fill = theme.blueSoft;
+  logReturns.getRange(`A${returnEntryFirstRow}:I${returnEntryLastRow}`).format.font = { color: theme.blue };
+  logReturns.getRange(`J${returnEntryFirstRow}:O${returnEntryLastRow}`).format.fill = theme.soft;
+  logReturns.getRange(`J${returnEntryFirstRow}:O${returnEntryLastRow}`).format.font = { color: theme.ink };
+  logReturns.getRange(`E${returnEntryFirstRow}:E${returnEntryLastRow}`).dataValidation = { rule: { type: "list", values: ["Initiated", "Shipped Back", "Refund Pending", "Refunded", "Rejected", "Closed"] } };
+  logReturns.getRange(`A${returnEntryFirstRow}:A${returnEntryLastRow}`).format.numberFormat = dateFormat;
+  logReturns.getRange(`B${returnEntryFirstRow}:B${returnEntryLastRow}`).format.numberFormat = "@";
+  logReturns.getRange(`D${returnEntryFirstRow}:D${returnEntryLastRow}`).format.numberFormat = "0.00";
+  logReturns.getRange(`F${returnEntryFirstRow}:G${returnEntryLastRow}`).format.numberFormat = currencyFormat;
+  logReturns.getRange(`H${returnEntryFirstRow}:H${returnEntryLastRow}`).format.numberFormat = dateFormat;
+  logReturns.getRange(`J${returnEntryFirstRow}:J${returnEntryLastRow}`).format.numberFormat = "0.00";
+  logReturns.getRange(`K${returnEntryFirstRow}:L${returnEntryLastRow}`).format.numberFormat = currencyFormat;
+  logReturns.getRange(`O${returnEntryFirstRow}:O${returnEntryLastRow}`).conditionalFormats.addCustom(`=$O${returnEntryFirstRow}="No"`, { fill: theme.greenSoft, font: { color: theme.green } });
+  logReturns.getRange(`O${returnEntryFirstRow}:O${returnEntryLastRow}`).conditionalFormats.addCustom(`=AND($O${returnEntryFirstRow}<>"",$O${returnEntryFirstRow}<>"No")`, { fill: theme.amberSoft, font: { color: theme.amber } });
+  const table = logReturns.tables.add(`A4:O${returnEntryLastRow}`, true, "ReturnEntryTable");
+  table.showFilterButton = true;
+  logReturns.freezePanes.freezeRows(4);
+  logReturns.freezePanes.freezeColumns(3);
+  setWidths(logReturns, { A: 105, B: 165, C: 340, D: 100, E: 130, F: 120, G: 120, H: 105, I: 300, J: 100, K: 115, L: 125, M: 105, N: 180, O: 150 }, returnEntryLastRow);
 }
 
 function buildExtraProfit() {
@@ -357,7 +547,7 @@ function buildAmazonAudit() {
   const formulaRows = Array.from({ length: amazonCapacity }, (_, index) => {
     const row = index + 2;
     return {
-      direct: `=IF(C${row}="","",IF(COUNTIF('Tracking'!$F$2:$F$${trackingCapacity + 1},C${row})>0,"Yes","No"))`,
+      direct: `=IF(C${row}="","",IF(OR(COUNTIF('Tracking'!$F$2:$F$${trackingCapacity + 1},C${row})>0,COUNTIF('Add Orders'!$E$${addOrderFirstRow}:$E$${addOrderLastRow},C${row})>0),"Yes","No"))`,
       classification: `=IF(C${row}="","",IF(I${row}="Yes","BFMR reservation matched",IF(COUNTIF('Settings'!$F$4:$F$20,C${row})>0,"BFMR match via correction",IF(B${row}<'Settings'!$B$3,"Outside BFMR export coverage",IF(F${row}="Yes","Cancelled, no reservation required",IF(H${row}="Personal/Household","Personal purchase, no reservation expected",IF(H${row}="BFMR Inventory","Needs BFMR review","Needs classification")))))))`,
       review: `=IF(C${row}="","",IF(OR(J${row}="Needs BFMR review",J${row}="Needs classification"),"Yes","No"))`,
     };
@@ -398,14 +588,14 @@ function buildMonthly() {
     const trackingLast = trackingCapacity + 1;
     const addonLast = addonCapacity + 1;
     return [
-      `=COUNTIFS('Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`,
-      `=SUMIFS('Tracking'!$E$2:$E$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`,
-      `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`,
-      `=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`,
-      `=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row})`,
+      `=COUNTIFS('Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+COUNTIFS('Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
+      `=SUMIFS('Tracking'!$E$2:$E$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$D$${addOrderFirstRow}:$D$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
+      `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
+      `=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$P$${addOrderFirstRow}:$P$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`,
+      `=SUMIFS('Tracking'!$S$2:$S$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row})+SUMIFS('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row})`,
       `=SUMIFS('Extra Profit'!$E$2:$E$${addonLast},'Extra Profit'!$B$2:$B$${addonLast},A${row})`,
       `=F${row}+G${row}`,
-      `=SUMIFS('Tracking'!$T$2:$T$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row})`,
+      `=SUMIFS('Tracking'!$T$2:$T$${trackingLast},'Tracking'!$AC$2:$AC$${trackingLast},A${row})+SUMIFS('Add Orders'!$V$${addOrderFirstRow}:$V$${addOrderLastRow},'Add Orders'!$AA$${addOrderFirstRow}:$AA$${addOrderLastRow},A${row})`,
     ];
   });
   monthly.getRange(`C2:C${months.length + 1}`).format.numberFormat = "0.00";
@@ -514,9 +704,11 @@ function buildSettings() {
   settings.getRange("B14:B21").format.numberFormat = currencyFormat;
   settings.getRange("D2:D2").values = [["Editable Cell Legend"]];
   styleHeader(settings.getRange("D2"), theme.purple);
-  settings.getRange("D3:E6").values = [["Blue text", "User-editable input"], ["Black text", "Formula/calculation"], ["Green text", "Imported source data"], ["Yellow fill", "Review or classification needed"]];
+  settings.getRange("D3:E6").values = [["Blue cells", "Simple user input"], ["Gray cells", "Formula/calculation"], ["Green text", "Imported source data"], ["Yellow fill", "Review or classification needed"]];
   styleBody(settings.getRange("D3:E6"));
-  settings.getRange("D3").format.font = { color: "#0000FF" };
+  settings.getRange("D3:E3").format.fill = theme.blueSoft;
+  settings.getRange("D3").format.font = { color: theme.blue };
+  settings.getRange("D4:E4").format.fill = theme.soft;
   settings.getRange("D5").format.font = { color: "#008000" };
   settings.getRange("D6:E6").format.fill = theme.amberSoft;
   settings.getRange("F2:H2").values = [["Amazon Order #", "BFMR Recorded Order #", "Known Correction"]];
@@ -527,10 +719,10 @@ function buildSettings() {
   settings.getRange("F3:G20").format.numberFormat = "@";
   settings.getRange("A24:B24").values = [["Source Metadata", "Value"]];
   styleHeader(settings.getRange("A24:B24"), theme.green);
-  settings.getRange("A25:B29").values = [["BFMR source", sourceWorkbookPath || clean(metadata.source_url) || clean(metadata.tracker_export)], ["Normalized record count", records.length], ["Detailed Amazon rows", Array.isArray(amazonOrders) ? amazonOrders.length : 0], ["Full Amazon audit rows", amazonHistory.length], ["Accounting convention", "Cancelled and excluded return/deadline rows do not affect spend, payout, or profit"]];
-  styleBody(settings.getRange("A25:B29"));
+  settings.getRange("A25:B31").values = [["BFMR source", sourceWorkbookPath || clean(metadata.source_url) || clean(metadata.tracker_export)], ["Normalized record count", records.length], ["Detailed Amazon rows", Array.isArray(amazonOrders) ? amazonOrders.length : 0], ["Full Amazon audit rows", amazonHistory.length], ["Add Orders capacity", addOrderCapacity], ["Log Returns capacity", returnEntryCapacity], ["Accounting convention", "Cancelled and excluded return/deadline rows do not affect spend, payout, or profit"]];
+  styleBody(settings.getRange("A25:B31"));
   settings.getRange("A32:H36").merge(true);
-  settings.getRange("A32:A36").values = [["How to keep this workbook current"], ["1. Add or edit BFMR rows on Tracking. Blue text cells are inputs; formula columns calculate automatically."], ["2. Paste new Amazon orders into Amazon Audit and classify Purpose. Add known order-ID corrections above when needed."], ["3. Log checking bonuses, BFMR referrals not already in Tracking, Young Adult cashback, and other income on Extra Profit."], ["4. Use Checks after each update. New rows with a blank Source Row update totals without breaking the imported-snapshot tie-outs."]];
+  settings.getRange("A32:A36").values = [["How to keep this workbook current"], ["1. Add each new BFMR order on Add Orders. Enter the blue cells and leave calculated cells alone."], ["2. Record new returns and refunds on Log Returns. Returns remains the detailed historical audit."], ["3. Paste new Amazon orders into Amazon Audit and classify Purpose when a row is flagged."], ["4. Add bonuses on Extra Profit, then open Checks to confirm the imported snapshot still passes."]];
   settings.getRange("A32:H36").format = { fill: theme.blueSoft, wrapText: true, font: { color: theme.ink } };
   settings.getRange("A32:H32").format.font = { bold: true, color: theme.navy };
   settings.getRange("H4:H5").format.wrapText = true;
@@ -543,11 +735,20 @@ function buildDashboard() {
   dashboard.getRange("A1").values = [["Toopa's BFMR Tracking"]];
   styleTitle(dashboard.getRange("A1:P1"), theme.ink);
   dashboard.getRange("A2:P2").merge();
-  dashboard.getRange("A2").values = [[`Standalone Excel tracker | BFMR source through ${formatIsoDate(maxRecordDate(records))} | Blue cells are editable`]];
+  dashboard.getRange("A2").values = [[`BFMR source through ${formatIsoDate(maxRecordDate(records))} | Add new rows on Add Orders | Blue cells are editable`]];
   dashboard.getRange("A2:P2").format = { fill: theme.soft, font: { color: theme.muted }, horizontalAlignment: "center" };
   const trackingLast = trackingCapacity + 1;
   const addonLast = addonCapacity + 1;
-  const kpis = [["A4:D4", "A5:D6", "Total Spend", `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")`, currencyFormat, theme.blueSoft], ["E4:H4", "E5:H6", "Expected Payout", `=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")`, currencyFormat, theme.greenSoft], ["I4:L4", "I5:L6", "Product Profit", `=SUM('Tracking'!$S$2:$S$${trackingLast})`, currencyFormat, theme.greenSoft], ["M4:P4", "M5:P6", "Total Profit + Extras", `=SUM('Tracking'!$S$2:$S$${trackingLast})+SUM('Extra Profit'!$E$2:$E$${addonLast})`, currencyFormat, theme.amberSoft], ["A8:D8", "A9:D10", "Pending Profit", `=SUM('Tracking'!$T$2:$T$${trackingLast})`, currencyFormat, theme.amberSoft], ["E8:H8", "E9:H10", "Open Payout", `=SUM('Tracking'!$U$2:$U$${trackingLast})`, currencyFormat, theme.blueSoft], ["I8:L8", "I9:L10", "Cash Paid", `=SUMIFS('Tracking'!$M$2:$M$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")`, currencyFormat, theme.greenSoft], ["M8:P8", "M9:P10", "BFMR Orders Without Reservation", `=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Needs BFMR review")`, integerFormat, theme.greenSoft]];
+  const kpis = [
+    ["A4:D4", "A5:D6", "Total Spend", `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, currencyFormat, theme.blueSoft],
+    ["E4:H4", "E5:H6", "Expected Payout", `=SUMIFS('Tracking'!$K$2:$K$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$P$${addOrderFirstRow}:$P$${addOrderLastRow},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, currencyFormat, theme.greenSoft],
+    ["I4:L4", "I5:L6", "Product Profit", `=SUM('Tracking'!$S$2:$S$${trackingLast})+SUM('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow})`, currencyFormat, theme.greenSoft],
+    ["M4:P4", "M5:P6", "Total Profit + Extras", `=SUM('Tracking'!$S$2:$S$${trackingLast})+SUM('Add Orders'!$U$${addOrderFirstRow}:$U$${addOrderLastRow})+SUM('Extra Profit'!$E$2:$E$${addonLast})`, currencyFormat, theme.amberSoft],
+    ["A8:D8", "A9:D10", "Pending Profit", `=SUM('Tracking'!$T$2:$T$${trackingLast})+SUM('Add Orders'!$V$${addOrderFirstRow}:$V$${addOrderLastRow})`, currencyFormat, theme.amberSoft],
+    ["E8:H8", "E9:H10", "Open Payout", `=SUM('Tracking'!$U$2:$U$${trackingLast})+SUM('Add Orders'!$W$${addOrderFirstRow}:$W$${addOrderLastRow})`, currencyFormat, theme.blueSoft],
+    ["I8:L8", "I9:L10", "Cash Paid", `=SUMIFS('Tracking'!$M$2:$M$${trackingLast},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$Q$${addOrderFirstRow}:$Q$${addOrderLastRow},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, currencyFormat, theme.greenSoft],
+    ["M8:P8", "M9:P10", "BFMR Orders Without Reservation", `=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Needs BFMR review")`, integerFormat, theme.greenSoft],
+  ];
   for (const [labelRange, valueRange, label, formula, numberFormat, fill] of kpis) {
     dashboard.getRange(labelRange).merge(); dashboard.getRange(valueRange).merge();
     dashboard.getRange(labelRange.split(":")[0]).values = [[label]]; dashboard.getRange(valueRange.split(":")[0]).formulas = [[formula]];
@@ -571,11 +772,11 @@ function buildDashboard() {
   dashboard.getRange("A34:D34").values = [["Lifecycle", "Rows", "Spend", "Open Payout"]]; styleHeader(dashboard.getRange("A34:D34"), theme.purple);
   const lifecycleStages = ["Reserved", "Ordered", "Shipped", "Package Received", "Processed", "Paid"];
   dashboard.getRange("A35:D40").values = lifecycleStages.map((stage) => [stage, null, null, null]); styleBody(dashboard.getRange("A35:D40"));
-  dashboard.getRange("B35:D40").formulas = lifecycleStages.map((_, index) => { const row = index + 35; return [`=COUNTIF('Tracking'!$C$2:$C$${trackingLast},A${row})`, `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$C$2:$C$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")`, `=SUMIFS('Tracking'!$U$2:$U$${trackingLast},'Tracking'!$C$2:$C$${trackingLast},A${row})`]; });
+  dashboard.getRange("B35:D40").formulas = lifecycleStages.map((_, index) => { const row = index + 35; return [`=COUNTIF('Tracking'!$C$2:$C$${trackingLast},A${row})+COUNTIF('Add Orders'!$X$${addOrderFirstRow}:$X$${addOrderLastRow},A${row})`, `=SUMIFS('Tracking'!$I$2:$I$${trackingLast},'Tracking'!$C$2:$C$${trackingLast},A${row},'Tracking'!$A$2:$A$${trackingLast},"Yes")+SUMIFS('Add Orders'!$O$${addOrderFirstRow}:$O$${addOrderLastRow},'Add Orders'!$X$${addOrderFirstRow}:$X$${addOrderLastRow},A${row},'Add Orders'!$N$${addOrderFirstRow}:$N$${addOrderLastRow},"Yes")`, `=SUMIFS('Tracking'!$U$2:$U$${trackingLast},'Tracking'!$C$2:$C$${trackingLast},A${row})+SUMIFS('Add Orders'!$W$${addOrderFirstRow}:$W$${addOrderLastRow},'Add Orders'!$X$${addOrderFirstRow}:$X$${addOrderLastRow},A${row})`]; });
   dashboard.getRange("C35:D40").format.numberFormat = currencyFormat;
   dashboard.getRange("F34:I34").values = [["Audit Item", "Count", "Value", "Action"]]; styleHeader(dashboard.getRange("F34:I34"), theme.green);
-  dashboard.getRange("F35:I39").values = [["Personal/household Amazon orders", null, null, "No BFMR reservation expected"], ["Cancelled Amazon orders", null, null, "Excluded"], ["Known BFMR order-ID corrections", null, null, "Already reconciled"], ["Returns needing review", null, null, "Open Returns tab"], ["Tracking data-quality flags", null, null, "Filter Tracking, Data Quality"]]; styleBody(dashboard.getRange("F35:I39"));
-  dashboard.getRange("G35:H39").formulas = [[`=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Personal purchase, no reservation expected")`, `=SUMIFS('Amazon Audit'!$D$2:$D$${amazonCapacity + 1},'Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Personal purchase, no reservation expected")`], [`=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Cancelled, no reservation required")`, `=SUMIFS('Amazon Audit'!$D$2:$D$${amazonCapacity + 1},'Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Cancelled, no reservation required")`], [`=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"BFMR match via correction")`, `=SUMIFS('Amazon Audit'!$D$2:$D$${amazonCapacity + 1},'Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"BFMR match via correction")`], [`=COUNTIF('Returns'!$S$2:$S$${returnsCapacity + 1},"Yes")`, `=SUM('Returns'!$K$2:$K$${returnsCapacity + 1})`], [`=COUNTIF('Tracking'!$AE$2:$AE$${trackingLast},"Missing*")`, `=0`]];
+  dashboard.getRange("F35:I39").values = [["Personal/household Amazon orders", null, null, "No BFMR reservation expected"], ["Cancelled Amazon orders", null, null, "Excluded"], ["Known BFMR order-ID corrections", null, null, "Already reconciled"], ["Returns needing review", null, null, "Open Log Returns / Returns"], ["Order data-quality flags", null, null, "Filter Add Orders / Tracking"]]; styleBody(dashboard.getRange("F35:I39"));
+  dashboard.getRange("G35:H39").formulas = [[`=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Personal purchase, no reservation expected")`, `=SUMIFS('Amazon Audit'!$D$2:$D$${amazonCapacity + 1},'Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Personal purchase, no reservation expected")`], [`=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Cancelled, no reservation required")`, `=SUMIFS('Amazon Audit'!$D$2:$D$${amazonCapacity + 1},'Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"Cancelled, no reservation required")`], [`=COUNTIF('Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"BFMR match via correction")`, `=SUMIFS('Amazon Audit'!$D$2:$D$${amazonCapacity + 1},'Amazon Audit'!$J$2:$J$${amazonCapacity + 1},"BFMR match via correction")`], [`=COUNTIF('Returns'!$S$2:$S$${returnsCapacity + 1},"Yes")+COUNTIFS('Log Returns'!$O$${returnEntryFirstRow}:$O$${returnEntryLastRow},"<>No",'Log Returns'!$O$${returnEntryFirstRow}:$O$${returnEntryLastRow},"<>")`, `=SUM('Returns'!$K$2:$K$${returnsCapacity + 1})+SUM('Log Returns'!$F$${returnEntryFirstRow}:$F$${returnEntryLastRow})`], [`=COUNTIF('Tracking'!$AE$2:$AE$${trackingLast},"Missing*")+COUNTIF('Add Orders'!$AB$${addOrderFirstRow}:$AB$${addOrderLastRow},"Missing*")`, `=0`]];
   dashboard.getRange("H35:H39").format.numberFormat = currencyFormat;
   dashboard.getRange("A43:I44").merge();
   dashboard.getRange("A43").formulas = [[`=IF(COUNTIF('Amazon Audit'!$K$2:$K$${amazonCapacity + 1},"Yes")=0,"Current conclusion: every identified BFMR inventory order has a reservation. Unmatched Amazon orders are personal/household purchases or cancelled orders.","Review needed: Amazon Audit contains orders that still need a BFMR reservation decision.")`]];
