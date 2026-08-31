@@ -120,6 +120,7 @@ async function waitForUsefulPage(page, kind) {
 
 async function waitForBfmrGridReady(page) {
   const deadline = Date.now() + 5 * 60 * 1000;
+  let refreshAttempts = 0;
   while (Date.now() < deadline) {
     const state = await page.evaluate(() => {
       const text = document.body?.innerText || "";
@@ -134,18 +135,35 @@ async function waitForBfmrGridReady(page) {
         text: String(el.innerText || el.textContent || "").slice(0, 2000),
       }));
       const holderOrderCount = holders.reduce((sum, holder) => sum + ((holder.text.match(/\b\d{3}-\d{7}-\d{7}\b/g) || []).length), 0);
+      const pageLength = String(document.querySelector(".page-length")?.textContent || "").replace(/\s+/g, " ");
+      const pageRange = pageLength.match(/Showing\s*(\d+)\s*-\s*(\d+)\s*of\s*(\d+)/i);
       return {
         url: location.href,
         title: document.title,
         orderCount,
         holderOrderCount,
+        shownThrough: Number(pageRange?.[2] || 0),
+        expectedRows: Number(pageRange?.[3] || pageLength.match(/of\s*(\d+)\s*$/i)?.[1] || 0),
         hasTrackerHeaders,
         holderCount: holders.length,
         loadingText: /loading|please wait/i.test(text),
+        noData: /no data found/i.test(text),
       };
     }).catch((error) => ({ error: error.message, orderCount: 0, holderOrderCount: 0, hasTrackerHeaders: false }));
     log("BFMR grid readiness", state);
     if (state.hasTrackerHeaders && (state.orderCount >= 5 || state.holderOrderCount >= 5)) return state;
+    if (state.hasTrackerHeaders && !state.noData && state.shownThrough > 0 && state.expectedRows > 0) return state;
+    if (state.hasTrackerHeaders && state.noData && refreshAttempts < 3) {
+      const allButton = page.locator("button#all:visible").first();
+      if (await allButton.count()) {
+        refreshAttempts += 1;
+        log("Refreshing stalled BFMR grid through the All filter", {
+          attempt: refreshAttempts,
+          expectedRows: state.expectedRows,
+        });
+        await allButton.click().catch(() => undefined);
+      }
+    }
     await page.waitForTimeout(3000);
   }
   throw new Error("Timed out waiting for BFMR tracker rows to load.");
@@ -466,6 +484,7 @@ function loadAmazonTargets(accountLabel) {
   const existing = readJsonFile(path.join(ROOT, "data", "amazon_orders.json"), []);
   const skipPaid = ["1", "true", "yes"].includes(argValue("skip-paid", "").toLowerCase());
   const refreshAll = ["1", "true", "yes"].includes(argValue("refresh-all", "").toLowerCase());
+  const includeCancelled = ["1", "true", "yes"].includes(argValue("include-cancelled", "").toLowerCase());
   const now = Date.now();
   const staleEtaMs = 12 * 60 * 60 * 1000;
   const needsEtaRefresh = (order) => {
@@ -497,7 +516,7 @@ function loadAmazonTargets(accountLabel) {
     const order = normalizeOrder(record.order_number);
     if (!order || seen.has(order)) continue;
     const status = String(record.status || "").trim().toLowerCase();
-    if (status === "cancelled") continue;
+    if (status === "cancelled" && !includeCancelled) continue;
     if (!refreshAll && skipPaid && status === "paid" && !needsEtaRefresh(existingByOrder.get(order) || {})) continue;
     if (MANUAL_ASSUMED_ORDERS.has(order)) continue;
     if (!refreshAll && (!skipPaid || status === "paid") && alreadyFound.has(order)) continue;
